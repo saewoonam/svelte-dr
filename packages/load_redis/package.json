@@ -1,0 +1,10 @@
+{
+  "name": "load_redis",
+  "version": "1.0.0",
+  "description": "load redis with timeseries data",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "ioredis": "^4.28.5"
+  }
+}

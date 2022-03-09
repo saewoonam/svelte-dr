@@ -1,0 +1,42 @@
+version: "3.3"
+
+services:
+  node:
+    # image: node:13-stretch
+    image: node:lts-alpine3.14
+    working_dir: "/app"
+    volumes:
+      - .:/app
+
+  frontend:
+    # image: node:13-stretch
+    image: node:lts-alpine3.14
+    working_dir: "/app/packages/frontend"
+    command: yarn dev
+    user: "${UID}:${GID}"
+    ports:
+      - 5000:5000
+      - 35729:35729
+    volumes:
+      - .:/app
+
+  backend:
+    # image: node:13-stretch
+    image: node:lts-alpine3.14
+    working_dir: "/app/packages/backend"
+    user: "${UID}:${GID}"
+    command: yarn dev
+    ports:
+      - 3000:3000
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+
+  redis:
+    image: redislabs/redistimeseries
+    command: redis-server --appendonly yes --loadmodule /usr/lib/redis/modules/redistimeseries.so --save 60 1
+    ports:
+      - 6379:6379
+    volumes:
+    - ./redis-volume:/data
