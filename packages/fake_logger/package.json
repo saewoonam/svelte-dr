@@ -1,0 +1,11 @@
+{
+  "name": "fake_logger",
+  "version": "1.0.0",
+  "description": "generate fake data, two sensors",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "ioredis": "^4.28.5",
+    "pino": "^7.8.1"
+  }
+}

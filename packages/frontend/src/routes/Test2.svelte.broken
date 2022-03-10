@@ -1,0 +1,9 @@
+<script>
+    import TempTable from '../components/temperature_table.svelte';
+
+</script>
+<style>
+</style>
+<div>
+    Hello
+</div>

@@ -23,5 +23,7 @@
     <input bind:value={username} type="text" />
   </div>
   <button on:click={handleJoin}>Join !</button>
-  <button on:click={handleTest}>test</button>
+  <!--
+  <button on:click={handleTest}>test</button> */
+    -->
 </div>

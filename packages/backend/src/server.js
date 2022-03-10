@@ -4,8 +4,10 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const Redis = require("ioredis");
 
-const redis_sub = new Redis({host:"redis"});
-const redis_fetch = new Redis({host:"redis"});
+// const redis_sub = new Redis({host:"redis"});
+// const redis_fetch = new Redis({host:"redis"});
+const redis_sub = new Redis();
+const redis_fetch = new Redis();
 const channels = {};
 
 redis_sub.subscribe('messages').then(console.log('subscribe'));

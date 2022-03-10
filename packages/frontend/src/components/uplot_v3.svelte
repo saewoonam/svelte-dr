@@ -1,4 +1,5 @@
 <script>
+    import uPlot from 'uplot';
     import { onMount, afterUpdate } from 'svelte';
     import {data_config, opts_config, colors} from '../tools/uplot_v3_config.js'
     import {downloadBlob} from '../tools/download.js'
@@ -11,7 +12,7 @@
     export let opts = opts_config;
     export let labels = ['y0', 'y1']
     let plotDiv;
-    let uPlot;
+    // let uPlot;
     let uplot;
     let html2canvas;
     let autox = true;
@@ -52,9 +53,11 @@
         return y_range;
     }
     opts.scales.y.range = null;
+    /*
     opts['plugins'] =  [ 
        legendAsTooltipPlugin(),
      ]
+    */
     opts.cursor.bind.dblclick = (u, targ, handler) => {
         return e => {
             console.log('in dblclick')
@@ -91,11 +94,16 @@
     });
     let mounted = false;
     onMount(async () => {
+        /*
         const module = await import ('uplot');
         uPlot = module.default;
         console.log("uplot onMount")
         uplot = new uPlot(opts,data,plotDiv); 
         mounted = true;
+        */
+        uplot = uPlot(opts,data,plotDiv); 
+        mounted = true;
+
         /*
         const m = await import ('html2canvas');
         html2canvas = m.default;
@@ -213,11 +221,11 @@
 
 </script>
 <style>
+/* @import "https://leeoniya.github.io/uPlot/dist/uPlot.min.css"; */
 button {
     font-size: 18px;
     }
 </style>
-
     <link rel="stylesheet" href="https://leeoniya.github.io/uPlot/dist/uPlot.min.css">
     <div>
         <button on:click={resetAxis}>

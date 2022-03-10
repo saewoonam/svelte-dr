@@ -1,5 +1,5 @@
 <script>
-    //import Flatpickr from 'svelte-flatpickr'
+    // import Flatpickr from 'svelte-flatpickr'
     import Flatpickr from '../components/Flatpickr.svelte';
     export let date = new Date()
     export let disabled = false;

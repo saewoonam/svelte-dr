@@ -1,0 +1,35 @@
+<script>
+    import { createChannelStore2 } from "../channel/store2";
+    import { onMount, beforeUpdate, afterUpdate } from "svelte";
+    let messages;
+    let response;
+    onMount(async () => {
+        console.log('Test.svelte onMount');
+        /*
+        const store = createChannelStore2('test2');
+        // console.log(store);
+        
+        store.subscribe(incomingMessages => {
+          messages = incomingMessages;
+          if (Array.isArray(messages)) {
+                messages = messages[0];
+            }
+        });
+        */
+        response = await fetch('http://localhost:3000/stage1/fetch')
+        console.log('response', await response.json())
+        // return store.close;
+        // createChannelStore2.subscribe( value=> console.log(value));
+    });
+    // $:console.log('messages', messages);
+    $:console.log('auto subscription', $createChannelStore2.message);
+</script>
+
+<div>
+    Test tweak
+</div>
+{#if $createChannelStore2}
+<div>
+        {$createChannelStore2.message}
+</div>
+{/if}

@@ -1,15 +1,21 @@
 import { writable } from "svelte/store";
 
-export const createChannelStore2 = (channelId) => {
+// export const createChannelStore2 = (channelId) => {
+function createStore2() {
   const { subscribe, set, update } = writable([]);
-
+  const channelId = 'test2';
   const eventSource = new EventSource(
     `http://localhost:3000/${channelId}/listen`
   );
 
   eventSource.onmessage = (e) => {
-    console.log('event.data', e.data);
-    update((messages) => JSON.parse(e.data));
+    console.log('createStore2 event.data', e.data);
+    let msg = JSON.parse(e.data);
+    if (Array.isArray(msg)) {
+        console.log('convert from array')
+        msg = msg[0];
+    }
+    update(() => msg);
   };
 
   return {
@@ -18,3 +24,5 @@ export const createChannelStore2 = (channelId) => {
     close: eventSource.close,
   };
 };
+
+export const redisSub=createStore2();

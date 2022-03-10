@@ -17,6 +17,11 @@
     "svelte-spa-router": "2.1.0"
   },
   "dependencies": {
-    "sirv-cli": "^0.4.4"
+    "file-saver": "^2.0.5",
+    "fuse": "^0.4.0",
+    "html2canvas": "^1.4.1",
+    "sirv-cli": "^0.4.4",
+    "svelte-flatpickr": "^3.2.6",
+    "uplot": "^1.6.19"
   }
 }
