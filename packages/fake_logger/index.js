@@ -1,7 +1,7 @@
 const Redis = require('ioredis')
 const logger = require('pino')()
 
-const redis = new Redis();
+const redisPub = new Redis();
 // logger.info(redis)
 // console.log(redis)
 
@@ -15,15 +15,17 @@ async function getData() {
         busyGetData = true;
         console.log( 'getData', (new Date()).getTime() )
         let message = {'time': (new Date()).getTime()}
-        message.sensor1 = 2
-        message.sensor2 = 50
+        message.type = 'temperatures'
+        message.stage2 = 2 + 2*0.1*Math.random()
+        message.stage1 = 50 + 50*0.1*Math.random()
         await wait(1500);
-        console.log(message)
+        console.log(JSON.stringify(message))
+        await redisPub.publish('messages', JSON.stringify(message))
         busyGetData = false;
     } else {
         console.log('getData, busy from before')
     }
 }
-setInterval(getData, 1000);
+setInterval(getData, 10000);
 
-redis.disconnect()
+// redisPub.disconnect()

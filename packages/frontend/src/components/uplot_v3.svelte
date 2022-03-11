@@ -90,7 +90,7 @@
     // console.log('opts.series', opts.series)
     // console.log('labels', labels);
     labels.forEach((item, index) => {
-        opts.series[index].label = item;
+        opts.series[index+1].label = item; // offset index by 1, index 0: time
     });
     let mounted = false;
     onMount(async () => {

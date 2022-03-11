@@ -1,34 +1,102 @@
-<!--
 <svelte:head>
-  <title>nodeWebFridge</title>
+  <title>Test2 nodeWebFridge</title>
 </svelte:head>
--->
 <div class="row">
     <div class="column side">
         <TempTable table_data={table_data} title={title} />
+        {#if loaded}
         <Timepicker />
+        {/if}
     </div>
     <div class="column main">
-        <Uplot />
+        {#if loaded}
+            <Uplot data={plot_data} labels={plot_keys} />
+        {:else}
+            <Loader loading={!loaded} />
+        {/if}
     </div>
 
 </div>
 
 
 <script>
+    import { redisSub } from "../channel/store2";
     import { onMount } from "svelte";
     import Timepicker from '../components/timepicker.svelte';
     import TempTable from '../components/temperature_table.svelte';
     import {table_data_default, controls_default, states_default} from '../tools/defaults.js';
     import Uplot from '../components/uplot_v3.svelte';
+    import Loader from '../components/Loader.svelte';
     
     console.log(table_data_default);
     let table_data = table_data_default;
+    table_data = {'stage1':'', 'stage2':''};
+    let plot_data = null;
+    let loaded = false;
     let title = new Date().toLocaleString();
+    let plot_keys = ['stage1', 'stage2'];
+
+    async function fetchRedis() { // Fetch all the sensor data from the server
+        console.log('fetchRedis');
+        plot_data = null;
+        // console.log('plot_keys', plot_keys);
+        for (let key of plot_keys) {
+            console.log('process redis data', key);
+            let response = await fetch(`http://localhost:3000/${key}/fetch`)
+            let data = await response.json()
+            // console.log('data', key,  data.data);
+            let times = data.data.map(outer=>Number(outer[0]));
+            let readings = data.data.map(outer=>Number(outer[1]));
+            if (plot_data) {
+                // plot_data defined... need to merge in new data
+                // console.log('merge into plot_data');
+                plot_data.push(readings);
+            } else {
+                plot_data = [times, readings];
+                // console.log('create plot_data');
+                // console.log('times', times, readings);
+            }
+        }
+        loaded = true;
+    }
+
     onMount(async() => {
-        let response = await fetch('http://localhost:3000/stage1/fetch')
-        console.log('response', await response.json())
+        await fetchRedis();
+        console.log('Finished onMounted');
     });
+
+    $: console.log('loaded', loaded, 'plot_data', plot_data);
+    $: {
+        let msg = $redisSub.message;
+        let ready_to_update = false;
+        // console.log('got this redisSub message: ', msg);
+        if (msg) {  // Check if it is a valid dictionary
+            try {
+                // Try to convert message to dictonary
+                msg = JSON.parse(msg);
+                ready_to_update = true;
+            }
+            catch(e) {console.log('parse redis failed msg:', msg);
+            }
+        }
+        if (ready_to_update) {
+            // Update table
+            Object.keys(table_data).forEach(elt => {
+                table_data[elt] = msg[elt];
+            });
+
+            // Update time
+            title = new Date(msg.time).toLocaleString();
+            // Update plot
+            if (loaded) {
+                plot_data[0].push(msg.time); // push time into plot_data
+                plot_keys.forEach((key, idx)=> { // push sensor readings
+                    plot_data[idx+1].push(msg[key])
+                });
+                plot_data = plot_data // Uplot does not update without this...
+            }
+        }
+    }
 </script>
 <style>
 * {

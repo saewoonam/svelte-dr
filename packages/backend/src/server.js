@@ -12,7 +12,7 @@ const channels = {};
 
 redis_sub.subscribe('messages').then(console.log('subscribe'));
 redis_sub.on("message", (channel, message) => {
-  console.log(`Received ${message} from ${channel} ${Object.keys(channels)}`);
+  // console.log(`Received ${message} from ${channel} ${Object.keys(channels)}`);
   let event =  {
       username: "redis",
       message: message,
