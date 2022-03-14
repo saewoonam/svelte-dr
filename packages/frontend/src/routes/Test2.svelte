@@ -34,7 +34,16 @@
     let plot_data = null;
     let loaded = false;
     let title = new Date().toLocaleString();
-    let plot_keys = ['stage1', 'stage2'];
+    let plot_keys; //  = ['stage1', 'stage2'];
+    let table_keys; 
+
+    async function getRedis(list_name) { // Fetch all the sensor data from the server
+        console.log(`get list ${list_name} from redis`);
+        let response = await fetch(`http://localhost:3000/get/${list_name}`)
+        let data = await response.json()
+        console.log('got ', data);
+        return data
+    }
 
     async function fetchRedis() { // Fetch all the sensor data from the server
         console.log('fetchRedis');
@@ -61,6 +70,9 @@
     }
 
     onMount(async() => {
+        plot_keys = await getRedis('plot_keys');
+        table_keys = await getRedis('table_keys');
+        // console.log('got p_k', p_k);
         await fetchRedis();
         console.log('Finished onMounted');
     });

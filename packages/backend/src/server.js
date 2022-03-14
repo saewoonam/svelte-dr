@@ -4,10 +4,14 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const Redis = require("ioredis");
 
+let host = process.env.REDIS || "localhost"
+console.log('process.env.REDIS', process.env.REDIS)
 // const redis_sub = new Redis({host:"redis"});
 // const redis_fetch = new Redis({host:"redis"});
-const redis_sub = new Redis();
-const redis_fetch = new Redis();
+console.log('redis host: ', host);
+const redis_sub = new Redis(host);
+const redis_fetch = new Redis(host);
+//
 const channels = {};
 
 redis_sub.subscribe('messages').then(console.log('subscribe'));
@@ -35,6 +39,21 @@ function sendEventsToAll(event, channelId) {
 app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: false }));
+
+app.get("/get/sensors", async(req, res) => {
+    let list = await redis_fetch.lrange('sensors', 0, -1);
+    res.send(JSON.stringify(list));
+});
+
+app.get("/get/plot_keys", async(req, res) => {
+    let list = await redis_fetch.lrange('plot_keys', 0, -1);
+    res.send(JSON.stringify(list));
+});
+
+app.get("/get/table_keys", async(req, res) => {
+    let list = await redis_fetch.lrange('table_keys', 0, -1);
+    res.send(JSON.stringify(list));
+});
 
 app.get("/:sensor/fetch", (req, res) => {
     // console.log(req.params);
@@ -100,5 +119,5 @@ app.get("/:channelId/listen", function (req, res) {
 });
 
 app.listen(3000, function () {
-  console.log("SSE Tchat listening on port 3000!");
+  console.log("Server SSE listening on port 3000!");
 });

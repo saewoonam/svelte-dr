@@ -6,9 +6,10 @@
   import Test2 from "./routes/Test2.svelte";
 
   const routes = {
-    "/": Home,
+    "/home": Home,
     "/channel/:id": Channel,
     "/test": Test,
+    "/": Test2,
     "/test2": Test2,
   };
 </script>
