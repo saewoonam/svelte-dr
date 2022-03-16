@@ -4,6 +4,7 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const Redis = require("ioredis");
 
+let port = process.env.PORT || 4000
 let host = process.env.REDIS || "localhost"
 console.log('process.env.REDIS', process.env.REDIS)
 // const redis_sub = new Redis({host:"redis"});
@@ -22,7 +23,7 @@ redis_sub.on("message", (channel, message) => {
       message: message,
       time: Date.now(),
     };
-  console.log(JSON.stringify(event))
+  // console.log(JSON.stringify(event))
   Object.keys(channels).forEach(id => sendEventsToAll(event, id));
 });
 
@@ -118,6 +119,6 @@ app.get("/:channelId/listen", function (req, res) {
   });
 });
 
-app.listen(3000, function () {
-  console.log("Server SSE listening on port 3000!");
+app.listen(port, function () {
+  console.log(`Server SSE listening on port ${port}!`);
 });

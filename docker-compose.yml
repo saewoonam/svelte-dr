@@ -1,16 +1,16 @@
-version: "3.3"
+version: "3"
 
 services:
   node:
     # image: node:13-stretch
-    image: node:lts-alpine3.14
+    image: node:lts-slim
     working_dir: "/app"
     volumes:
       - .:/app
 
   frontend:
     # image: node:13-stretch
-    image: node:lts-alpine3.14
+    image: node:lts-slim
     working_dir: "/app/packages/frontend"
     command: yarn dev
     user: "${UID}:${GID}"
@@ -22,24 +22,17 @@ services:
 
   backend:
     # image: node:13-stretch
-    image: node:lts-alpine3.14
+    image: node:lts-slim
     working_dir: "/app/packages/backend"
     user: "${UID}:${GID}"
     environment:
-      - REDIS=redis
+      - PORT=4000
+      #- REDIS=redis
+      #- REDIS=132.163.53.82
     command: yarn dev
-    ports:
-      - 3000:3000
+    #ports:
+      #- 4000:4000
     volumes:
       - .:/app
-    depends_on:
-      - redis
+    network_mode: host
 
-  redis:
-    image: redislabs/redistimeseries
-    # command: redis-server --appendonly yes --loadmodule /usr/lib/redis/modules/redistimeseries.so --save 60 1
-    command: redis-server --loadmodule /usr/lib/redis/modules/redistimeseries.so --save 60 1
-    ports:
-      - 6379:6379
-    volumes:
-    - ./redis-volume:/data

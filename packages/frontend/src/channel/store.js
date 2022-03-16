@@ -4,7 +4,7 @@ export const createChannelStore = (channelId) => {
   const { subscribe, set, update } = writable([]);
 
   const eventSource = new EventSource(
-    `http://localhost:3000/${channelId}/listen`
+    `http://132.163.53.82:4000/${channelId}/listen`
   );
 
   eventSource.onmessage = (e) => {

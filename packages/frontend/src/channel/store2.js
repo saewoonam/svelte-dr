@@ -5,7 +5,7 @@ function createStore2() {
   const { subscribe, set, update } = writable([]);
   const channelId = 'test2';
   const eventSource = new EventSource(
-    `http://localhost:3000/${channelId}/listen`
+    `http://132.163.53.82:4000/${channelId}/listen`
   );
 
   eventSource.onmessage = (e) => {

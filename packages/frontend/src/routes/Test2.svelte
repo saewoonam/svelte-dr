@@ -39,7 +39,8 @@
 
     async function getRedis(list_name) { // Fetch all the sensor data from the server
         console.log(`get list ${list_name} from redis`);
-        let response = await fetch(`http://localhost:3000/get/${list_name}`)
+        // let response = await fetch(`http://localhost:4000/get/${list_name}`)
+        let response = await fetch(`http://132.163.53.82:4000/get/${list_name}`)
         let data = await response.json()
         console.log('got ', data);
         return data
@@ -51,10 +52,11 @@
         // console.log('plot_keys', plot_keys);
         for (let key of plot_keys) {
             console.log('process redis data', key);
-            let response = await fetch(`http://localhost:3000/${key}/fetch`)
+            // let response = await fetch(`http://localhost:4000/${key}/fetch`)
+            let response = await fetch(`http://132.163.53.82:4000/${key}/fetch`)
             let data = await response.json()
             // console.log('data', key,  data.data);
-            let times = data.data.map(outer=>Number(outer[0]));
+            let times = data.data.map(outer=>Number(outer[0])/1000); //  convert from ms to s
             let readings = data.data.map(outer=>Number(outer[1]));
             if (plot_data) {
                 // plot_data defined... need to merge in new data
@@ -71,7 +73,11 @@
 
     onMount(async() => {
         plot_keys = await getRedis('plot_keys');
+        console.log('onMount plot_keys', plot_keys);
         table_keys = await getRedis('table_keys');
+        console.log('onMount plot_keys', table_keys);
+        table_data = {}
+        table_keys.forEach(elt=>table_data[elt]='')
         // console.log('got p_k', p_k);
         await fetchRedis();
         console.log('Finished onMounted');
@@ -101,7 +107,8 @@
             title = new Date(msg.time).toLocaleString();
             // Update plot
             if (loaded) {
-                plot_data[0].push(msg.time); // push time into plot_data
+                console.log('got time:', msg.time);
+                plot_data[0].push(msg.time/1000); // push time into plot_data, convet to seconds
                 plot_keys.forEach((key, idx)=> { // push sensor readings
                     plot_data[idx+1].push(msg[key])
                 });
