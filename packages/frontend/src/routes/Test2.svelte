@@ -4,6 +4,8 @@
 <div class="row">
     <div class="column side">
         <TempTable table_data={table_data} title={title} />
+        <CollapsibleSection headerText={"choose_items_for_plotting"} /> 
+        <CollapsibleSection headerText={"choose_items_for_the_table"} /> 
         {#if loaded}
         <Timepicker />
         {/if}
@@ -27,6 +29,7 @@
     import {table_data_default, controls_default, states_default} from '../tools/defaults.js';
     import Uplot from '../components/uplot_v3.svelte';
     import Loader from '../components/Loader.svelte';
+	import CollapsibleSection from '../components/CollapsibleSection.svelte'
     
     console.log(table_data_default);
     let table_data = table_data_default;
@@ -36,6 +39,8 @@
     let title = new Date().toLocaleString();
     let plot_keys; //  = ['stage1', 'stage2'];
     let table_keys; 
+    let all_plot_keys;
+    let all_table_keys;
 
     async function getRedis(list_name) { // Fetch all the sensor data from the server
         console.log(`get list ${list_name} from redis`);
@@ -72,9 +77,11 @@
     }
 
     onMount(async() => {
-        plot_keys = await getRedis('plot_keys');
+        all_plot_keys = await getRedis('plot_keys');
+        plot_keys = [...all_plot_keys];
         console.log('onMount plot_keys', plot_keys);
-        table_keys = await getRedis('table_keys');
+        all_table_keys = await getRedis('table_keys');
+        table_keys = [...all_table_keys];
         console.log('onMount plot_keys', table_keys);
         table_data = {}
         table_keys.forEach(elt=>table_data[elt]='')
