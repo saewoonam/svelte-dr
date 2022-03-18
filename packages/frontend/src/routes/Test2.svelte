@@ -5,14 +5,14 @@
     <div class="column side">
         <TempTable table_data={table_data} title={title} />
         <Config
-              label={"choose-plot-items"} 
+              label={`click to choose plot items`} 
               menu={all_plot_keys}
               bind:choices={plot_keys} 
               on:close={handleConfigPlotClose}
               on:open={handleConfigPlotOpen}
         />
         <Config
-              label={"choose-table-items"} 
+              label={`choose table items`} 
               menu={all_table_keys}
               bind:choices={table_keys} 
               on:close={handleConfigTableClose}
@@ -39,7 +39,7 @@
     import {table_data_default, controls_default, states_default} from '../tools/defaults.js';
     import Uplot from '../components/uplot_v3.svelte';
     import Loader from '../components/Loader.svelte';
-	import Config from '../components/ConfigKeys.svelte'
+	import Config from '../components/MyCollapse.svelte'
     
     console.log(table_data_default);
     let table_data = table_data_default;
