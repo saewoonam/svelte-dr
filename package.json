@@ -5,5 +5,8 @@
   "private": true,
   "workspaces": [
     "packages/**"
-  ]
+  ],
+  "dependencies": {
+    "svelte-collapsible": "^0.2.1"
+  }
 }

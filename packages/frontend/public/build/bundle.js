@@ -30,6 +30,17 @@ var app = (function () {
     function safe_not_equal(a, b) {
         return a != a ? b == b : a !== b || ((a && typeof a === 'object') || typeof a === 'function');
     }
+    let src_url_equal_anchor;
+    function src_url_equal(element_src, url) {
+        if (!src_url_equal_anchor) {
+            src_url_equal_anchor = document.createElement('a');
+        }
+        src_url_equal_anchor.href = url;
+        return element_src === src_url_equal_anchor.href;
+    }
+    function is_empty(obj) {
+        return Object.keys(obj).length === 0;
+    }
     function validate_store(store, name) {
         if (store != null && typeof store.subscribe !== 'function') {
             throw new Error(`'${name}' is not a store with a 'subscribe' method`);
@@ -74,6 +85,23 @@ var app = (function () {
         }
         return $$scope.dirty;
     }
+    function update_slot_base(slot, slot_definition, ctx, $$scope, slot_changes, get_slot_context_fn) {
+        if (slot_changes) {
+            const slot_context = get_slot_context(slot_definition, ctx, $$scope, get_slot_context_fn);
+            slot.p(slot_context, slot_changes);
+        }
+    }
+    function get_all_dirty_from_scope($$scope) {
+        if ($$scope.ctx.length > 32) {
+            const dirty = [];
+            const length = $$scope.ctx.length / 32;
+            for (let i = 0; i < length; i++) {
+                dirty[i] = -1;
+            }
+            return dirty;
+        }
+        return -1;
+    }
     function exclude_internal_props(props) {
         const result = {};
         for (const k in props)
@@ -89,7 +117,9 @@ var app = (function () {
                 rest[k] = props[k];
         return rest;
     }
-
+    function action_destroyer(action_result) {
+        return action_result && is_function(action_result.destroy) ? action_result.destroy : noop;
+    }
     function append(target, node) {
         target.appendChild(node);
     }
@@ -140,7 +170,10 @@ var app = (function () {
             else if (key === 'style') {
                 node.style.cssText = attributes[key];
             }
-            else if (key === '__value' || descriptors[key] && descriptors[key].set) {
+            else if (key === '__value') {
+                node.value = node[key] = attributes[key];
+            }
+            else if (descriptors[key] && descriptors[key].set) {
                 node[key] = attributes[key];
             }
             else {
@@ -151,25 +184,29 @@ var app = (function () {
     function xlink_attr(node, attribute, value) {
         node.setAttributeNS('http://www.w3.org/1999/xlink', attribute, value);
     }
-    function get_binding_group_value(group) {
-        const value = [];
+    function get_binding_group_value(group, __value, checked) {
+        const value = new Set();
         for (let i = 0; i < group.length; i += 1) {
             if (group[i].checked)
-                value.push(group[i].__value);
+                value.add(group[i].__value);
         }
-        return value;
+        if (!checked) {
+            value.delete(__value);
+        }
+        return Array.from(value);
     }
     function children(element) {
         return Array.from(element.childNodes);
     }
     function set_input_value(input, value) {
-        if (value != null || input.value) {
-            input.value = value;
-        }
+        input.value = value == null ? '' : value;
     }
-    function custom_event(type, detail) {
+    function toggle_class(element, name, toggle) {
+        element.classList[toggle ? 'add' : 'remove'](name);
+    }
+    function custom_event(type, detail, bubbles = false) {
         const e = document.createEvent('CustomEvent');
-        e.initCustomEvent(type, false, false, detail);
+        e.initCustomEvent(type, bubbles, false, detail);
         return e;
     }
 
@@ -179,7 +216,7 @@ var app = (function () {
     }
     function get_current_component() {
         if (!current_component)
-            throw new Error(`Function called outside component initialization`);
+            throw new Error('Function called outside component initialization');
         return current_component;
     }
     function beforeUpdate(fn) {
@@ -211,7 +248,8 @@ var app = (function () {
     function bubble(component, event) {
         const callbacks = component.$$.callbacks[event.type];
         if (callbacks) {
-            callbacks.slice().forEach(fn => fn(event));
+            // @ts-ignore
+            callbacks.slice().forEach(fn => fn.call(this, event));
         }
     }
 
@@ -233,21 +271,40 @@ var app = (function () {
     function add_flush_callback(fn) {
         flush_callbacks.push(fn);
     }
-    let flushing = false;
+    // flush() calls callbacks in this order:
+    // 1. All beforeUpdate callbacks, in order: parents before children
+    // 2. All bind:this callbacks, in reverse order: children before parents.
+    // 3. All afterUpdate callbacks, in order: parents before children. EXCEPT
+    //    for afterUpdates called during the initial onMount, which are called in
+    //    reverse order: children before parents.
+    // Since callbacks might update component values, which could trigger another
+    // call to flush(), the following steps guard against this:
+    // 1. During beforeUpdate, any updated components will be added to the
+    //    dirty_components array and will cause a reentrant call to flush(). Because
+    //    the flush index is kept outside the function, the reentrant call will pick
+    //    up where the earlier call left off and go through all dirty components. The
+    //    current_component value is saved and restored so that the reentrant call will
+    //    not interfere with the "parent" flush() call.
+    // 2. bind:this callbacks cannot trigger new flush() calls.
+    // 3. During afterUpdate, any updated components will NOT have their afterUpdate
+    //    callback called a second time; the seen_callbacks set, outside the flush()
+    //    function, guarantees this behavior.
     const seen_callbacks = new Set();
+    let flushidx = 0; // Do *not* move this inside the flush() function
     function flush() {
-        if (flushing)
-            return;
-        flushing = true;
+        const saved_component = current_component;
         do {
             // first, call beforeUpdate functions
             // and update components
-            for (let i = 0; i < dirty_components.length; i += 1) {
-                const component = dirty_components[i];
+            while (flushidx < dirty_components.length) {
+                const component = dirty_components[flushidx];
+                flushidx++;
                 set_current_component(component);
                 update(component.$$);
             }
+            set_current_component(null);
             dirty_components.length = 0;
+            flushidx = 0;
             while (binding_callbacks.length)
                 binding_callbacks.pop()();
             // then, once components are updated, call
@@ -267,8 +324,8 @@ var app = (function () {
             flush_callbacks.pop()();
         }
         update_scheduled = false;
-        flushing = false;
         seen_callbacks.clear();
+        set_current_component(saved_component);
     }
     function update($$) {
         if ($$.fragment !== null) {
@@ -318,7 +375,11 @@ var app = (function () {
         }
     }
 
-    const globals = (typeof window !== 'undefined' ? window : global);
+    const globals = (typeof window !== 'undefined'
+        ? window
+        : typeof globalThis !== 'undefined'
+            ? globalThis
+            : global);
 
     function get_spread_update(levels, updates) {
         const update = {};
@@ -364,22 +425,24 @@ var app = (function () {
     function create_component(block) {
         block && block.c();
     }
-    function mount_component(component, target, anchor) {
+    function mount_component(component, target, anchor, customElement) {
         const { fragment, on_mount, on_destroy, after_update } = component.$$;
         fragment && fragment.m(target, anchor);
-        // onMount happens before the initial afterUpdate
-        add_render_callback(() => {
-            const new_on_destroy = on_mount.map(run).filter(is_function);
-            if (on_destroy) {
-                on_destroy.push(...new_on_destroy);
-            }
-            else {
-                // Edge case - component was destroyed immediately,
-                // most likely as a result of a binding initialising
-                run_all(new_on_destroy);
-            }
-            component.$$.on_mount = [];
-        });
+        if (!customElement) {
+            // onMount happens before the initial afterUpdate
+            add_render_callback(() => {
+                const new_on_destroy = on_mount.map(run).filter(is_function);
+                if (on_destroy) {
+                    on_destroy.push(...new_on_destroy);
+                }
+                else {
+                    // Edge case - component was destroyed immediately,
+                    // most likely as a result of a binding initialising
+                    run_all(new_on_destroy);
+                }
+                component.$$.on_mount = [];
+            });
+        }
         after_update.forEach(add_render_callback);
     }
     function destroy_component(component, detaching) {
@@ -401,10 +464,9 @@ var app = (function () {
         }
         component.$$.dirty[(i / 31) | 0] |= (1 << (i % 31));
     }
-    function init(component, options, instance, create_fragment, not_equal, props, dirty = [-1]) {
+    function init(component, options, instance, create_fragment, not_equal, props, append_styles, dirty = [-1]) {
         const parent_component = current_component;
         set_current_component(component);
-        const prop_values = options.props || {};
         const $$ = component.$$ = {
             fragment: null,
             ctx: null,
@@ -416,19 +478,23 @@ var app = (function () {
             // lifecycle
             on_mount: [],
             on_destroy: [],
+            on_disconnect: [],
             before_update: [],
             after_update: [],
-            context: new Map(parent_component ? parent_component.$$.context : []),
+            context: new Map(options.context || (parent_component ? parent_component.$$.context : [])),
             // everything else
             callbacks: blank_object(),
-            dirty
+            dirty,
+            skip_bound: false,
+            root: options.target || parent_component.$$.root
         };
+        append_styles && append_styles($$.root);
         let ready = false;
         $$.ctx = instance
-            ? instance(component, prop_values, (i, ret, ...rest) => {
+            ? instance(component, options.props || {}, (i, ret, ...rest) => {
                 const value = rest.length ? rest[0] : ret;
                 if ($$.ctx && not_equal($$.ctx[i], $$.ctx[i] = value)) {
-                    if ($$.bound[i])
+                    if (!$$.skip_bound && $$.bound[i])
                         $$.bound[i](value);
                     if (ready)
                         make_dirty(component, i);
@@ -454,11 +520,14 @@ var app = (function () {
             }
             if (options.intro)
                 transition_in(component.$$.fragment);
-            mount_component(component, options.target, options.anchor);
+            mount_component(component, options.target, options.anchor, options.customElement);
             flush();
         }
         set_current_component(parent_component);
     }
+    /**
+     * Base class for Svelte components. Used when dev=false.
+     */
     class SvelteComponent {
         $destroy() {
             destroy_component(this, 1);
@@ -473,55 +542,59 @@ var app = (function () {
                     callbacks.splice(index, 1);
             };
         }
-        $set() {
-            // overridden by instance, if it has props
+        $set($$props) {
+            if (this.$$set && !is_empty($$props)) {
+                this.$$.skip_bound = true;
+                this.$$set($$props);
+                this.$$.skip_bound = false;
+            }
         }
     }
 
     function dispatch_dev(type, detail) {
-        document.dispatchEvent(custom_event(type, Object.assign({ version: '3.20.1' }, detail)));
+        document.dispatchEvent(custom_event(type, Object.assign({ version: '3.46.4' }, detail), true));
     }
     function append_dev(target, node) {
-        dispatch_dev("SvelteDOMInsert", { target, node });
+        dispatch_dev('SvelteDOMInsert', { target, node });
         append(target, node);
     }
     function insert_dev(target, node, anchor) {
-        dispatch_dev("SvelteDOMInsert", { target, node, anchor });
+        dispatch_dev('SvelteDOMInsert', { target, node, anchor });
         insert(target, node, anchor);
     }
     function detach_dev(node) {
-        dispatch_dev("SvelteDOMRemove", { node });
+        dispatch_dev('SvelteDOMRemove', { node });
         detach(node);
     }
     function listen_dev(node, event, handler, options, has_prevent_default, has_stop_propagation) {
-        const modifiers = options === true ? ["capture"] : options ? Array.from(Object.keys(options)) : [];
+        const modifiers = options === true ? ['capture'] : options ? Array.from(Object.keys(options)) : [];
         if (has_prevent_default)
             modifiers.push('preventDefault');
         if (has_stop_propagation)
             modifiers.push('stopPropagation');
-        dispatch_dev("SvelteDOMAddEventListener", { node, event, handler, modifiers });
+        dispatch_dev('SvelteDOMAddEventListener', { node, event, handler, modifiers });
         const dispose = listen(node, event, handler, options);
         return () => {
-            dispatch_dev("SvelteDOMRemoveEventListener", { node, event, handler, modifiers });
+            dispatch_dev('SvelteDOMRemoveEventListener', { node, event, handler, modifiers });
             dispose();
         };
     }
     function attr_dev(node, attribute, value) {
         attr(node, attribute, value);
         if (value == null)
-            dispatch_dev("SvelteDOMRemoveAttribute", { node, attribute });
+            dispatch_dev('SvelteDOMRemoveAttribute', { node, attribute });
         else
-            dispatch_dev("SvelteDOMSetAttribute", { node, attribute, value });
+            dispatch_dev('SvelteDOMSetAttribute', { node, attribute, value });
     }
     function prop_dev(node, property, value) {
         node[property] = value;
-        dispatch_dev("SvelteDOMSetProperty", { node, property, value });
+        dispatch_dev('SvelteDOMSetProperty', { node, property, value });
     }
     function set_data_dev(text, data) {
         data = '' + data;
-        if (text.data === data)
+        if (text.wholeText === data)
             return;
-        dispatch_dev("SvelteDOMSetData", { node: text, data });
+        dispatch_dev('SvelteDOMSetData', { node: text, data });
         text.data = data;
     }
     function validate_each_argument(arg) {
@@ -540,17 +613,20 @@ var app = (function () {
             }
         }
     }
+    /**
+     * Base class for Svelte components with some minor dev-enhancements. Used when dev=true.
+     */
     class SvelteComponentDev extends SvelteComponent {
         constructor(options) {
             if (!options || (!options.target && !options.$$inline)) {
-                throw new Error(`'target' is a required option`);
+                throw new Error("'target' is a required option");
             }
             super();
         }
         $destroy() {
             super.$destroy();
             this.$destroy = () => {
-                console.warn(`Component was already destroyed`); // eslint-disable-line no-console
+                console.warn('Component was already destroyed'); // eslint-disable-line no-console
             };
         }
         $capture_state() { }
@@ -565,7 +641,7 @@ var app = (function () {
      */
     function readable(value, start) {
         return {
-            subscribe: writable(value, start).subscribe,
+            subscribe: writable(value, start).subscribe
         };
     }
     /**
@@ -575,16 +651,15 @@ var app = (function () {
      */
     function writable(value, start = noop) {
         let stop;
-        const subscribers = [];
+        const subscribers = new Set();
         function set(new_value) {
             if (safe_not_equal(value, new_value)) {
                 value = new_value;
                 if (stop) { // store is ready
                     const run_queue = !subscriber_queue.length;
-                    for (let i = 0; i < subscribers.length; i += 1) {
-                        const s = subscribers[i];
-                        s[1]();
-                        subscriber_queue.push(s, value);
+                    for (const subscriber of subscribers) {
+                        subscriber[1]();
+                        subscriber_queue.push(subscriber, value);
                     }
                     if (run_queue) {
                         for (let i = 0; i < subscriber_queue.length; i += 2) {
@@ -600,17 +675,14 @@ var app = (function () {
         }
         function subscribe(run, invalidate = noop) {
             const subscriber = [run, invalidate];
-            subscribers.push(subscriber);
-            if (subscribers.length === 1) {
+            subscribers.add(subscriber);
+            if (subscribers.size === 1) {
                 stop = start(set) || noop;
             }
             run(value);
             return () => {
-                const index = subscribers.indexOf(subscriber);
-                if (index !== -1) {
-                    subscribers.splice(index, 1);
-                }
-                if (subscribers.length === 0) {
+                subscribers.delete(subscriber);
+                if (subscribers.size === 0) {
                     stop();
                     stop = null;
                 }
@@ -687,12 +759,13 @@ var app = (function () {
     	};
     }
 
-    /* app/node_modules/svelte-spa-router/Router.svelte generated by Svelte v3.20.1 */
+    /* app/node_modules/svelte-spa-router/Router.svelte generated by Svelte v3.46.4 */
 
     const { Error: Error_1, Object: Object_1, console: console_1 } = globals;
 
     // (209:0) {:else}
     function create_else_block(ctx) {
+    	let switch_instance;
     	let switch_instance_anchor;
     	let current;
     	var switch_value = /*component*/ ctx[0];
@@ -702,8 +775,8 @@ var app = (function () {
     	}
 
     	if (switch_value) {
-    		var switch_instance = new switch_value(switch_props());
-    		switch_instance.$on("routeEvent", /*routeEvent_handler_1*/ ctx[10]);
+    		switch_instance = new switch_value(switch_props());
+    		switch_instance.$on("routeEvent", /*routeEvent_handler_1*/ ctx[6]);
     	}
 
     	const block = {
@@ -734,7 +807,7 @@ var app = (function () {
 
     				if (switch_value) {
     					switch_instance = new switch_value(switch_props());
-    					switch_instance.$on("routeEvent", /*routeEvent_handler_1*/ ctx[10]);
+    					switch_instance.$on("routeEvent", /*routeEvent_handler_1*/ ctx[6]);
     					create_component(switch_instance.$$.fragment);
     					transition_in(switch_instance.$$.fragment, 1);
     					mount_component(switch_instance, switch_instance_anchor.parentNode, switch_instance_anchor);
@@ -771,6 +844,7 @@ var app = (function () {
 
     // (207:0) {#if componentParams}
     function create_if_block(ctx) {
+    	let switch_instance;
     	let switch_instance_anchor;
     	let current;
     	var switch_value = /*component*/ ctx[0];
@@ -783,8 +857,8 @@ var app = (function () {
     	}
 
     	if (switch_value) {
-    		var switch_instance = new switch_value(switch_props(ctx));
-    		switch_instance.$on("routeEvent", /*routeEvent_handler*/ ctx[9]);
+    		switch_instance = new switch_value(switch_props(ctx));
+    		switch_instance.$on("routeEvent", /*routeEvent_handler*/ ctx[5]);
     	}
 
     	const block = {
@@ -818,7 +892,7 @@ var app = (function () {
 
     				if (switch_value) {
     					switch_instance = new switch_value(switch_props(ctx));
-    					switch_instance.$on("routeEvent", /*routeEvent_handler*/ ctx[9]);
+    					switch_instance.$on("routeEvent", /*routeEvent_handler*/ ctx[5]);
     					create_component(switch_instance.$$.fragment);
     					transition_in(switch_instance.$$.fragment, 1);
     					mount_component(switch_instance, switch_instance_anchor.parentNode, switch_instance_anchor);
@@ -903,6 +977,8 @@ var app = (function () {
     				if (!if_block) {
     					if_block = if_blocks[current_block_type_index] = if_block_creators[current_block_type_index](ctx);
     					if_block.c();
+    				} else {
+    					if_block.p(ctx, dirty);
     				}
 
     				transition_in(if_block, 1);
@@ -937,21 +1013,21 @@ var app = (function () {
 
     function wrap(route, userData, ...conditions) {
     	// Check if we don't have userData
-    	if (userData && typeof userData == "function") {
+    	if (userData && typeof userData == 'function') {
     		conditions = conditions && conditions.length ? conditions : [];
     		conditions.unshift(userData);
     		userData = undefined;
     	}
 
     	// Parameter route and each item of conditions must be functions
-    	if (!route || typeof route != "function") {
-    		throw Error("Invalid parameter route");
+    	if (!route || typeof route != 'function') {
+    		throw Error('Invalid parameter route');
     	}
 
     	if (conditions && conditions.length) {
     		for (let i = 0; i < conditions.length; i++) {
-    			if (!conditions[i] || typeof conditions[i] != "function") {
-    				throw Error("Invalid parameter conditions[" + i + "]");
+    			if (!conditions[i] || typeof conditions[i] != 'function') {
+    				throw Error('Invalid parameter conditions[' + i + ']');
     			}
     		}
     	}
@@ -964,7 +1040,7 @@ var app = (function () {
     	}
 
     	// The _sveltesparouter flag is to confirm the object was created by this router
-    	Object.defineProperty(obj, "_sveltesparouter", { value: true });
+    	Object.defineProperty(obj, '_sveltesparouter', { value: true });
 
     	return obj;
     }
@@ -981,16 +1057,16 @@ var app = (function () {
      * @private
      */
     function getLocation() {
-    	const hashPosition = window.location.href.indexOf("#/");
+    	const hashPosition = window.location.href.indexOf('#/');
 
     	let location = hashPosition > -1
     	? window.location.href.substr(hashPosition + 1)
-    	: "/";
+    	: '/';
 
     	// Check if there's a querystring
-    	const qsPosition = location.indexOf("?");
+    	const qsPosition = location.indexOf('?');
 
-    	let querystring = "";
+    	let querystring = '';
 
     	if (qsPosition > -1) {
     		querystring = location.substr(qsPosition + 1);
@@ -1006,10 +1082,10 @@ var app = (function () {
     		set(getLocation());
     	};
 
-    	window.addEventListener("hashchange", update, false);
+    	window.addEventListener('hashchange', update, false);
 
     	return function stop() {
-    		window.removeEventListener("hashchange", update, false);
+    		window.removeEventListener('hashchange', update, false);
     	};
     });
 
@@ -1017,13 +1093,13 @@ var app = (function () {
     const querystring = derived(loc, $loc => $loc.querystring);
 
     function push(location) {
-    	if (!location || location.length < 1 || location.charAt(0) != "/" && location.indexOf("#/") !== 0) {
-    		throw Error("Invalid parameter location");
+    	if (!location || location.length < 1 || location.charAt(0) != '/' && location.indexOf('#/') !== 0) {
+    		throw Error('Invalid parameter location');
     	}
 
     	// Execute this code when the current call stack is complete
     	return nextTickPromise(() => {
-    		window.location.hash = (location.charAt(0) == "#" ? "" : "#") + location;
+    		window.location.hash = (location.charAt(0) == '#' ? '' : '#') + location;
     	});
     }
 
@@ -1035,41 +1111,41 @@ var app = (function () {
     }
 
     function replace(location) {
-    	if (!location || location.length < 1 || location.charAt(0) != "/" && location.indexOf("#/") !== 0) {
-    		throw Error("Invalid parameter location");
+    	if (!location || location.length < 1 || location.charAt(0) != '/' && location.indexOf('#/') !== 0) {
+    		throw Error('Invalid parameter location');
     	}
 
     	// Execute this code when the current call stack is complete
     	return nextTickPromise(() => {
-    		const dest = (location.charAt(0) == "#" ? "" : "#") + location;
+    		const dest = (location.charAt(0) == '#' ? '' : '#') + location;
 
     		try {
     			window.history.replaceState(undefined, undefined, dest);
     		} catch(e) {
     			// eslint-disable-next-line no-console
-    			console.warn("Caught exception while replacing the current page. If you're running this in the Svelte REPL, please note that the `replace` method might not work in this environment.");
+    			console.warn('Caught exception while replacing the current page. If you\'re running this in the Svelte REPL, please note that the `replace` method might not work in this environment.');
     		}
 
     		// The method above doesn't trigger the hashchange event, so let's do that manually
-    		window.dispatchEvent(new Event("hashchange"));
+    		window.dispatchEvent(new Event('hashchange'));
     	});
     }
 
     function link(node) {
     	// Only apply to <a> tags
-    	if (!node || !node.tagName || node.tagName.toLowerCase() != "a") {
-    		throw Error("Action \"link\" can only be used with <a> tags");
+    	if (!node || !node.tagName || node.tagName.toLowerCase() != 'a') {
+    		throw Error('Action "link" can only be used with <a> tags');
     	}
 
     	// Destination must start with '/'
-    	const href = node.getAttribute("href");
+    	const href = node.getAttribute('href');
 
-    	if (!href || href.length < 1 || href.charAt(0) != "/") {
-    		throw Error("Invalid value for \"href\" attribute");
+    	if (!href || href.length < 1 || href.charAt(0) != '/') {
+    		throw Error('Invalid value for "href" attribute');
     	}
 
     	// Add # to every href attribute
-    	node.setAttribute("href", "#" + href);
+    	node.setAttribute('href', '#' + href);
     }
 
     function nextTickPromise(cb) {
@@ -1087,11 +1163,13 @@ var app = (function () {
     	let $loc,
     		$$unsubscribe_loc = noop;
 
-    	validate_store(loc, "loc");
+    	validate_store(loc, 'loc');
     	component_subscribe($$self, loc, $$value => $$invalidate(4, $loc = $$value));
     	$$self.$$.on_destroy.push(() => $$unsubscribe_loc());
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Router', slots, []);
     	let { routes = {} } = $$props;
-    	let { prefix = "" } = $$props;
+    	let { prefix = '' } = $$props;
 
     	/**
      * Container for a route: path, component
@@ -1104,20 +1182,20 @@ var app = (function () {
      * @param {SvelteComponent} component - Svelte component for the route
      */
     		constructor(path, component) {
-    			if (!component || typeof component != "function" && (typeof component != "object" || component._sveltesparouter !== true)) {
-    				throw Error("Invalid component object");
+    			if (!component || typeof component != 'function' && (typeof component != 'object' || component._sveltesparouter !== true)) {
+    				throw Error('Invalid component object');
     			}
 
     			// Path must be a regular or expression, or a string starting with '/' or '*'
-    			if (!path || typeof path == "string" && (path.length < 1 || path.charAt(0) != "/" && path.charAt(0) != "*") || typeof path == "object" && !(path instanceof RegExp)) {
-    				throw Error("Invalid value for \"path\" argument");
+    			if (!path || typeof path == 'string' && (path.length < 1 || path.charAt(0) != '/' && path.charAt(0) != '*') || typeof path == 'object' && !(path instanceof RegExp)) {
+    				throw Error('Invalid value for "path" argument');
     			}
 
     			const { pattern, keys } = regexparam(path);
     			this.path = path;
 
     			// Check if the component is wrapped and we have conditions
-    			if (typeof component == "object" && component._sveltesparouter === true) {
+    			if (typeof component == 'object' && component._sveltesparouter === true) {
     				this.component = component.route;
     				this.conditions = component.conditions || [];
     				this.userData = component.userData;
@@ -1142,7 +1220,7 @@ var app = (function () {
     		match(path) {
     			// If there's a prefix, remove it before we run the matching
     			if (prefix && path.startsWith(prefix)) {
-    				path = path.substr(prefix.length) || "/";
+    				path = path.substr(prefix.length) || '/';
     			}
 
     			// Check if the pattern matches
@@ -1227,26 +1305,23 @@ var app = (function () {
     		);
     	};
 
-    	const writable_props = ["routes", "prefix"];
+    	const writable_props = ['routes', 'prefix'];
 
     	Object_1.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console_1.warn(`<Router> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console_1.warn(`<Router> was created with unknown prop '${key}'`);
     	});
 
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("Router", $$slots, []);
-
     	function routeEvent_handler(event) {
-    		bubble($$self, event);
+    		bubble.call(this, $$self, event);
     	}
 
     	function routeEvent_handler_1(event) {
-    		bubble($$self, event);
+    		bubble.call(this, $$self, event);
     	}
 
-    	$$self.$set = $$props => {
-    		if ("routes" in $$props) $$invalidate(2, routes = $$props.routes);
-    		if ("prefix" in $$props) $$invalidate(3, prefix = $$props.prefix);
+    	$$self.$$set = $$props => {
+    		if ('routes' in $$props) $$invalidate(2, routes = $$props.routes);
+    		if ('prefix' in $$props) $$invalidate(3, prefix = $$props.prefix);
     	};
 
     	$$self.$capture_state = () => ({
@@ -1276,10 +1351,10 @@ var app = (function () {
     	});
 
     	$$self.$inject_state = $$props => {
-    		if ("routes" in $$props) $$invalidate(2, routes = $$props.routes);
-    		if ("prefix" in $$props) $$invalidate(3, prefix = $$props.prefix);
-    		if ("component" in $$props) $$invalidate(0, component = $$props.component);
-    		if ("componentParams" in $$props) $$invalidate(1, componentParams = $$props.componentParams);
+    		if ('routes' in $$props) $$invalidate(2, routes = $$props.routes);
+    		if ('prefix' in $$props) $$invalidate(3, prefix = $$props.prefix);
+    		if ('component' in $$props) $$invalidate(0, component = $$props.component);
+    		if ('componentParams' in $$props) $$invalidate(1, componentParams = $$props.componentParams);
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -1311,7 +1386,7 @@ var app = (function () {
     						// Check if the route can be loaded - if all conditions succeed
     						if (!routesList[i].checkConditions(detail)) {
     							// Trigger an event to notify the user
-    							dispatchNextTick("conditionsFailed", detail);
+    							dispatchNextTick('conditionsFailed', detail);
 
     							break;
     						}
@@ -1320,13 +1395,13 @@ var app = (function () {
 
     						// Set componentParams onloy if we have a match, to avoid a warning similar to `<Component> was created with unknown prop 'params'`
     						// Of course, this assumes that developers always add a "params" prop when they are expecting parameters
-    						if (match && typeof match == "object" && Object.keys(match).length) {
+    						if (match && typeof match == 'object' && Object.keys(match).length) {
     							$$invalidate(1, componentParams = match);
     						} else {
     							$$invalidate(1, componentParams = null);
     						}
 
-    						dispatchNextTick("routeLoaded", detail);
+    						dispatchNextTick('routeLoaded', detail);
     					}
 
     					i++;
@@ -1341,10 +1416,6 @@ var app = (function () {
     		routes,
     		prefix,
     		$loc,
-    		RouteItem,
-    		routesList,
-    		dispatch,
-    		dispatchNextTick,
     		routeEvent_handler,
     		routeEvent_handler_1
     	];
@@ -1380,7 +1451,7 @@ var app = (function () {
     	}
     }
 
-    /* src/routes/Home.svelte generated by Svelte v3.20.1 */
+    /* src/routes/Home.svelte generated by Svelte v3.46.4 */
     const file = "src/routes/Home.svelte";
 
     function create_fragment$1(ctx) {
@@ -1396,6 +1467,7 @@ var app = (function () {
     	let input1;
     	let t5;
     	let button;
+    	let mounted;
     	let dispose;
 
     	const block = {
@@ -1429,7 +1501,7 @@ var app = (function () {
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
     		},
-    		m: function mount(target, anchor, remount) {
+    		m: function mount(target, anchor) {
     			insert_dev(target, div2, anchor);
     			append_dev(div2, div0);
     			append_dev(div0, span0);
@@ -1444,13 +1516,16 @@ var app = (function () {
     			set_input_value(input1, /*username*/ ctx[1]);
     			append_dev(div2, t5);
     			append_dev(div2, button);
-    			if (remount) run_all(dispose);
 
-    			dispose = [
-    				listen_dev(input0, "input", /*input0_input_handler*/ ctx[4]),
-    				listen_dev(input1, "input", /*input1_input_handler*/ ctx[5]),
-    				listen_dev(button, "click", /*handleJoin*/ ctx[2], false, false, false)
-    			];
+    			if (!mounted) {
+    				dispose = [
+    					listen_dev(input0, "input", /*input0_input_handler*/ ctx[3]),
+    					listen_dev(input1, "input", /*input1_input_handler*/ ctx[4]),
+    					listen_dev(button, "click", /*handleJoin*/ ctx[2], false, false, false)
+    				];
+
+    				mounted = true;
+    			}
     		},
     		p: function update(ctx, [dirty]) {
     			if (dirty & /*channelId*/ 1 && input0.value !== /*channelId*/ ctx[0]) {
@@ -1465,6 +1540,7 @@ var app = (function () {
     		o: noop,
     		d: function destroy(detaching) {
     			if (detaching) detach_dev(div2);
+    			mounted = false;
     			run_all(dispose);
     		}
     	};
@@ -1481,6 +1557,8 @@ var app = (function () {
     }
 
     function instance$1($$self, $$props, $$invalidate) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Home', slots, []);
     	let channelId = "";
     	let username = "";
 
@@ -1495,11 +1573,8 @@ var app = (function () {
     	const writable_props = [];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console.warn(`<Home> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<Home> was created with unknown prop '${key}'`);
     	});
-
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("Home", $$slots, []);
 
     	function input0_input_handler() {
     		channelId = this.value;
@@ -1520,22 +1595,15 @@ var app = (function () {
     	});
 
     	$$self.$inject_state = $$props => {
-    		if ("channelId" in $$props) $$invalidate(0, channelId = $$props.channelId);
-    		if ("username" in $$props) $$invalidate(1, username = $$props.username);
+    		if ('channelId' in $$props) $$invalidate(0, channelId = $$props.channelId);
+    		if ('username' in $$props) $$invalidate(1, username = $$props.username);
     	};
 
     	if ($$props && "$$inject" in $$props) {
     		$$self.$inject_state($$props.$$inject);
     	}
 
-    	return [
-    		channelId,
-    		username,
-    		handleJoin,
-    		handleTest,
-    		input0_input_handler,
-    		input1_input_handler
-    	];
+    	return [channelId, username, handleJoin, input0_input_handler, input1_input_handler];
     }
 
     class Home extends SvelteComponentDev {
@@ -1554,9 +1622,10 @@ var app = (function () {
 
     const createChannelStore = (channelId) => {
       const { subscribe, set, update } = writable([]);
-
+      const hostname = (new URL(window.location.href)).hostname;
+      console.log('store2 hostname:', hostname);
       const eventSource = new EventSource(
-        `http://132.163.53.82:4000/${channelId}/listen`
+        `http://${hostname}:4000/${channelId}/listen`
       );
 
       eventSource.onmessage = (e) => {
@@ -1570,7 +1639,7 @@ var app = (function () {
       };
     };
 
-    /* src/components/Message.svelte generated by Svelte v3.20.1 */
+    /* src/components/Message.svelte generated by Svelte v3.46.4 */
 
     const file$1 = "src/components/Message.svelte";
 
@@ -1786,6 +1855,8 @@ var app = (function () {
     }
 
     function instance$2($$self, $$props, $$invalidate) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Message', slots, []);
     	let { alignRight = false } = $$props;
 
     	let { message = {
@@ -1794,25 +1865,22 @@ var app = (function () {
     		time: Date.now()
     	} } = $$props;
 
-    	const writable_props = ["alignRight", "message"];
+    	const writable_props = ['alignRight', 'message'];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console.warn(`<Message> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<Message> was created with unknown prop '${key}'`);
     	});
 
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("Message", $$slots, []);
-
-    	$$self.$set = $$props => {
-    		if ("alignRight" in $$props) $$invalidate(0, alignRight = $$props.alignRight);
-    		if ("message" in $$props) $$invalidate(1, message = $$props.message);
+    	$$self.$$set = $$props => {
+    		if ('alignRight' in $$props) $$invalidate(0, alignRight = $$props.alignRight);
+    		if ('message' in $$props) $$invalidate(1, message = $$props.message);
     	};
 
     	$$self.$capture_state = () => ({ alignRight, message });
 
     	$$self.$inject_state = $$props => {
-    		if ("alignRight" in $$props) $$invalidate(0, alignRight = $$props.alignRight);
-    		if ("message" in $$props) $$invalidate(1, message = $$props.message);
+    		if ('alignRight' in $$props) $$invalidate(0, alignRight = $$props.alignRight);
+    		if ('message' in $$props) $$invalidate(1, message = $$props.message);
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -1852,7 +1920,7 @@ var app = (function () {
     	}
     }
 
-    /* src/components/TchatHeader.svelte generated by Svelte v3.20.1 */
+    /* src/components/TchatHeader.svelte generated by Svelte v3.46.4 */
 
     const file$2 = "src/components/TchatHeader.svelte";
 
@@ -1890,7 +1958,7 @@ var app = (function () {
     			t4 = text(t4_value);
     			t5 = space();
     			i = element("i");
-    			if (img.src !== (img_src_value = "./logo.png")) attr_dev(img, "src", img_src_value);
+    			if (!src_url_equal(img.src, img_src_value = "./logo.png")) attr_dev(img, "src", img_src_value);
     			attr_dev(img, "alt", "avatar");
     			attr_dev(img, "width", "55");
     			attr_dev(img, "class", "svelte-1hjxi75");
@@ -1949,27 +2017,26 @@ var app = (function () {
     }
 
     function instance$3($$self, $$props, $$invalidate) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('TchatHeader', slots, []);
     	let { title = "Chat" } = $$props;
     	let { messageCount = 0 } = $$props;
-    	const writable_props = ["title", "messageCount"];
+    	const writable_props = ['title', 'messageCount'];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console.warn(`<TchatHeader> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<TchatHeader> was created with unknown prop '${key}'`);
     	});
 
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("TchatHeader", $$slots, []);
-
-    	$$self.$set = $$props => {
-    		if ("title" in $$props) $$invalidate(0, title = $$props.title);
-    		if ("messageCount" in $$props) $$invalidate(1, messageCount = $$props.messageCount);
+    	$$self.$$set = $$props => {
+    		if ('title' in $$props) $$invalidate(0, title = $$props.title);
+    		if ('messageCount' in $$props) $$invalidate(1, messageCount = $$props.messageCount);
     	};
 
     	$$self.$capture_state = () => ({ title, messageCount });
 
     	$$self.$inject_state = $$props => {
-    		if ("title" in $$props) $$invalidate(0, title = $$props.title);
-    		if ("messageCount" in $$props) $$invalidate(1, messageCount = $$props.messageCount);
+    		if ('title' in $$props) $$invalidate(0, title = $$props.title);
+    		if ('messageCount' in $$props) $$invalidate(1, messageCount = $$props.messageCount);
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -2009,7 +2076,7 @@ var app = (function () {
     	}
     }
 
-    /* src/components/TchatInput.svelte generated by Svelte v3.20.1 */
+    /* src/components/TchatInput.svelte generated by Svelte v3.46.4 */
     const file$3 = "src/components/TchatInput.svelte";
 
     function create_fragment$4(ctx) {
@@ -2017,6 +2084,7 @@ var app = (function () {
     	let textarea;
     	let t0;
     	let button;
+    	let mounted;
     	let dispose;
 
     	const block = {
@@ -2038,18 +2106,21 @@ var app = (function () {
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
     		},
-    		m: function mount(target, anchor, remount) {
+    		m: function mount(target, anchor) {
     			insert_dev(target, div, anchor);
     			append_dev(div, textarea);
     			set_input_value(textarea, /*value*/ ctx[0]);
     			append_dev(div, t0);
     			append_dev(div, button);
-    			if (remount) run_all(dispose);
 
-    			dispose = [
-    				listen_dev(textarea, "input", /*textarea_input_handler*/ ctx[3]),
-    				listen_dev(button, "click", /*handleSubmit*/ ctx[1], false, false, false)
-    			];
+    			if (!mounted) {
+    				dispose = [
+    					listen_dev(textarea, "input", /*textarea_input_handler*/ ctx[2]),
+    					listen_dev(button, "click", /*handleSubmit*/ ctx[1], false, false, false)
+    				];
+
+    				mounted = true;
+    			}
     		},
     		p: function update(ctx, [dirty]) {
     			if (dirty & /*value*/ 1) {
@@ -2060,6 +2131,7 @@ var app = (function () {
     		o: noop,
     		d: function destroy(detaching) {
     			if (detaching) detach_dev(div);
+    			mounted = false;
     			run_all(dispose);
     		}
     	};
@@ -2076,6 +2148,8 @@ var app = (function () {
     }
 
     function instance$4($$self, $$props, $$invalidate) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('TchatInput', slots, []);
     	const dispatch = createEventDispatcher();
     	let value = "";
 
@@ -2087,11 +2161,8 @@ var app = (function () {
     	const writable_props = [];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console.warn(`<TchatInput> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<TchatInput> was created with unknown prop '${key}'`);
     	});
-
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("TchatInput", $$slots, []);
 
     	function textarea_input_handler() {
     		value = this.value;
@@ -2106,14 +2177,14 @@ var app = (function () {
     	});
 
     	$$self.$inject_state = $$props => {
-    		if ("value" in $$props) $$invalidate(0, value = $$props.value);
+    		if ('value' in $$props) $$invalidate(0, value = $$props.value);
     	};
 
     	if ($$props && "$$inject" in $$props) {
     		$$self.$inject_state($$props.$$inject);
     	}
 
-    	return [value, handleSubmit, dispatch, textarea_input_handler];
+    	return [value, handleSubmit, textarea_input_handler];
     }
 
     class TchatInput extends SvelteComponentDev {
@@ -2130,7 +2201,7 @@ var app = (function () {
     	}
     }
 
-    /* src/components/Tchat.svelte generated by Svelte v3.20.1 */
+    /* src/components/Tchat.svelte generated by Svelte v3.46.4 */
     const file$4 = "src/components/Tchat.svelte";
 
     function get_each_context(ctx, list, i) {
@@ -2143,10 +2214,11 @@ var app = (function () {
     // (91:6) {#each messages as message, i}
     function create_each_block(ctx) {
     	let li;
+    	let message;
     	let t;
     	let current;
 
-    	const message = new Message({
+    	message = new Message({
     			props: {
     				alignRight: /*i*/ ctx[11] % 2,
     				message: /*message*/ ctx[9]
@@ -2201,13 +2273,15 @@ var app = (function () {
 
     function create_fragment$5(ctx) {
     	let div1;
+    	let tchatheader;
     	let t0;
     	let div0;
     	let ul;
     	let t1;
+    	let tchatinput;
     	let current;
 
-    	const tchatheader = new TchatHeader({
+    	tchatheader = new TchatHeader({
     			props: {
     				title: `Chat on ${/*channelId*/ ctx[0]}`,
     				messageCount: /*messages*/ ctx[1].length
@@ -2227,7 +2301,7 @@ var app = (function () {
     		each_blocks[i] = null;
     	});
 
-    	const tchatinput = new TchatInput({ $$inline: true });
+    	tchatinput = new TchatInput({ $$inline: true });
     	tchatinput.$on("message", /*handleSendMessage*/ ctx[3]);
 
     	const block = {
@@ -2265,7 +2339,7 @@ var app = (function () {
     				each_blocks[i].m(ul, null);
     			}
 
-    			/*div0_binding*/ ctx[8](div0);
+    			/*div0_binding*/ ctx[4](div0);
     			append_dev(div1, t1);
     			mount_component(tchatinput, div1, null);
     			current = true;
@@ -2330,7 +2404,7 @@ var app = (function () {
     			if (detaching) detach_dev(div1);
     			destroy_component(tchatheader);
     			destroy_each(each_blocks, detaching);
-    			/*div0_binding*/ ctx[8](null);
+    			/*div0_binding*/ ctx[4](null);
     			destroy_component(tchatinput);
     		}
     	};
@@ -2348,8 +2422,10 @@ var app = (function () {
 
     function instance$5($$self, $$props, $$invalidate) {
     	let $querystring;
-    	validate_store(querystring, "querystring");
-    	component_subscribe($$self, querystring, $$value => $$invalidate(5, $querystring = $$value));
+    	validate_store(querystring, 'querystring');
+    	component_subscribe($$self, querystring, $$value => $$invalidate(6, $querystring = $$value));
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Tchat', slots, []);
 
     	const getUsername = querystring => {
     		const match = querystring.match(/user=([^&]*)/);
@@ -2392,23 +2468,21 @@ var app = (function () {
     		return store.close;
     	});
 
-    	const writable_props = ["channelId"];
+    	const writable_props = ['channelId'];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console.warn(`<Tchat> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<Tchat> was created with unknown prop '${key}'`);
     	});
 
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("Tchat", $$slots, []);
-
     	function div0_binding($$value) {
-    		binding_callbacks[$$value ? "unshift" : "push"](() => {
-    			$$invalidate(2, div = $$value);
+    		binding_callbacks[$$value ? 'unshift' : 'push'](() => {
+    			div = $$value;
+    			$$invalidate(2, div);
     		});
     	}
 
-    	$$self.$set = $$props => {
-    		if ("channelId" in $$props) $$invalidate(0, channelId = $$props.channelId);
+    	$$self.$$set = $$props => {
+    		if ('channelId' in $$props) $$invalidate(0, channelId = $$props.channelId);
     	};
 
     	$$self.$capture_state = () => ({
@@ -2431,28 +2505,18 @@ var app = (function () {
     	});
 
     	$$self.$inject_state = $$props => {
-    		if ("channelId" in $$props) $$invalidate(0, channelId = $$props.channelId);
-    		if ("messages" in $$props) $$invalidate(1, messages = $$props.messages);
-    		if ("username" in $$props) username = $$props.username;
-    		if ("div" in $$props) $$invalidate(2, div = $$props.div);
-    		if ("autoscroll" in $$props) autoscroll = $$props.autoscroll;
+    		if ('channelId' in $$props) $$invalidate(0, channelId = $$props.channelId);
+    		if ('messages' in $$props) $$invalidate(1, messages = $$props.messages);
+    		if ('username' in $$props) username = $$props.username;
+    		if ('div' in $$props) $$invalidate(2, div = $$props.div);
+    		if ('autoscroll' in $$props) autoscroll = $$props.autoscroll;
     	};
 
     	if ($$props && "$$inject" in $$props) {
     		$$self.$inject_state($$props.$$inject);
     	}
 
-    	return [
-    		channelId,
-    		messages,
-    		div,
-    		handleSendMessage,
-    		autoscroll,
-    		$querystring,
-    		getUsername,
-    		username,
-    		div0_binding
-    	];
+    	return [channelId, messages, div, handleSendMessage, div0_binding];
     }
 
     class Tchat extends SvelteComponentDev {
@@ -2470,7 +2534,7 @@ var app = (function () {
     		const { ctx } = this.$$;
     		const props = options.props || {};
 
-    		if (/*channelId*/ ctx[0] === undefined && !("channelId" in props)) {
+    		if (/*channelId*/ ctx[0] === undefined && !('channelId' in props)) {
     			console.warn("<Tchat> was created without expected prop 'channelId'");
     		}
     	}
@@ -2484,14 +2548,15 @@ var app = (function () {
     	}
     }
 
-    /* src/routes/Channel.svelte generated by Svelte v3.20.1 */
+    /* src/routes/Channel.svelte generated by Svelte v3.46.4 */
     const file$5 = "src/routes/Channel.svelte";
 
     function create_fragment$6(ctx) {
     	let div;
+    	let tchat;
     	let current;
 
-    	const tchat = new Tchat({
+    	tchat = new Tchat({
     			props: { channelId: /*params*/ ctx[0].id },
     			$$inline: true
     		});
@@ -2543,24 +2608,23 @@ var app = (function () {
     }
 
     function instance$6($$self, $$props, $$invalidate) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Channel', slots, []);
     	let { params = {} } = $$props;
-    	const writable_props = ["params"];
+    	const writable_props = ['params'];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console.warn(`<Channel> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<Channel> was created with unknown prop '${key}'`);
     	});
 
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("Channel", $$slots, []);
-
-    	$$self.$set = $$props => {
-    		if ("params" in $$props) $$invalidate(0, params = $$props.params);
+    	$$self.$$set = $$props => {
+    		if ('params' in $$props) $$invalidate(0, params = $$props.params);
     	};
 
     	$$self.$capture_state = () => ({ Tchat, params });
 
     	$$self.$inject_state = $$props => {
-    		if ("params" in $$props) $$invalidate(0, params = $$props.params);
+    		if ('params' in $$props) $$invalidate(0, params = $$props.params);
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -2592,7 +2656,7 @@ var app = (function () {
     	}
     }
 
-    /* src/routes/Test.svelte generated by Svelte v3.20.1 */
+    /* src/routes/Test.svelte generated by Svelte v3.46.4 */
 
     const { console: console_1$1 } = globals;
     const file$6 = "src/routes/Test.svelte";
@@ -2632,23 +2696,22 @@ var app = (function () {
     }
 
     function instance$7($$self, $$props, $$invalidate) {
-    	let redisSub = { "message": "not store" };
-    	console.log("redisSub", redisSub);
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Test', slots, []);
+    	let redisSub = { 'message': 'not store' };
+    	console.log('redisSub', redisSub);
 
     	onMount(async () => {
-    		console.log("Test.svelte onMount");
-    		let response = await fetch("http://localhost:3000/stage1/fetch");
-    		console.log("response", await response.json());
+    		console.log('Test.svelte onMount');
+    		let response = await fetch('http://localhost:3000/stage1/fetch');
+    		console.log('response', await response.json());
     	});
 
     	const writable_props = [];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console_1$1.warn(`<Test> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console_1$1.warn(`<Test> was created with unknown prop '${key}'`);
     	});
-
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("Test", $$slots, []);
 
     	$$self.$capture_state = () => ({
     		redisSub,
@@ -2658,7 +2721,7 @@ var app = (function () {
     	});
 
     	$$self.$inject_state = $$props => {
-    		if ("redisSub" in $$props) redisSub = $$props.redisSub;
+    		if ('redisSub' in $$props) redisSub = $$props.redisSub;
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -2686,10 +2749,11 @@ var app = (function () {
     function createStore2() {
       const { subscribe, set, update } = writable([]);
       const channelId = 'test2';
+      const hostname = (new URL(window.location.href)).hostname;
+      console.log('store2 hostname:', hostname);
       const eventSource = new EventSource(
-        `http://132.163.53.82:4000/${channelId}/listen`
+        `http://${hostname}:4000/${channelId}/listen`
       );
-
       eventSource.onmessage = (e) => {
         console.log('createStore2 event.data', e.data);
         let msg = JSON.parse(e.data);
@@ -3357,17 +3421,10 @@ var app = (function () {
             if (e !== undefined && e.type !== "blur") {
                 timeWrapper(e);
             }
-            var valueFromInput = self._input.value;
-            var dateFromInput = self.parseDate(valueFromInput);
-            var latestDate = self.latestSelectedDateObj;
-            if (valueFromInput && latestDate && (dateFromInput === null || dateFromInput === void 0 ? void 0 : dateFromInput.getTime()) !== (latestDate === null || latestDate === void 0 ? void 0 : latestDate.getTime())) {
-                setDate(dateFromInput);
-            }
-            else {
-                setHoursFromInputs();
-            }
+            var prevValue = self._input.value;
+            setHoursFromInputs();
             updateValue();
-            if (self._input.value !== valueFromInput) {
+            if (self._input.value !== prevValue) {
                 self._debouncedChange();
             }
         }
@@ -3443,7 +3500,7 @@ var app = (function () {
         }
         function setHoursFromDate(dateObj) {
             var date = dateObj || self.latestSelectedDateObj;
-            if (date) {
+            if (date && date instanceof Date) {
                 setHours(date.getHours(), date.getMinutes(), date.getSeconds());
             }
         }
@@ -4146,19 +4203,15 @@ var app = (function () {
                         e.path.indexOf &&
                         (~e.path.indexOf(self.input) ||
                             ~e.path.indexOf(self.altInput)));
-                var lostFocus = e.type === "blur"
-                    ? isInput &&
-                        e.relatedTarget &&
-                        !isCalendarElem(e.relatedTarget)
-                    : !isInput &&
-                        !isCalendarElement &&
-                        !isCalendarElem(e.relatedTarget);
+                var lostFocus = !isInput &&
+                    !isCalendarElement &&
+                    !isCalendarElem(e.relatedTarget);
                 var isIgnored = !self.config.ignoredFocusElements.some(function (elem) {
                     return elem.contains(eventTarget_1);
                 });
                 if (lostFocus && isIgnored) {
                     if (self.config.allowInput) {
-                        self.setDate(self._input.value, true, self.config.altInput
+                        self.setDate(self._input.value, false, self.config.altInput
                             ? self.config.altFormat
                             : self.config.dateFormat);
                     }
@@ -5075,7 +5128,8 @@ var app = (function () {
         }
         function isDateSelected(date) {
             for (var i = 0; i < self.selectedDates.length; i++) {
-                if (compareDates(self.selectedDates[i], date) === 0)
+                var selectedDate = self.selectedDates[i];
+                if (selectedDate instanceof Date && compareDates(selectedDate, date) === 0)
                     return "" + i;
             }
             return false;
@@ -5268,7 +5322,7 @@ var app = (function () {
         window.flatpickr = flatpickr;
     }
 
-    /* src/components/Flatpickr.svelte generated by Svelte v3.20.1 */
+    /* src/components/Flatpickr.svelte generated by Svelte v3.46.4 */
     const file$7 = "src/components/Flatpickr.svelte";
 
     // (1:6)      
@@ -5289,14 +5343,15 @@ var app = (function () {
     		},
     		m: function mount(target, anchor) {
     			insert_dev(target, input_1, anchor);
-    			/*input_1_binding*/ ctx[14](input_1);
+    			if (input_1.autofocus) input_1.focus();
+    			/*input_1_binding*/ ctx[10](input_1);
     		},
     		p: function update(ctx, dirty) {
-    			set_attributes(input_1, get_spread_update(input_1_levels, [dirty & /*$$restProps*/ 2 && /*$$restProps*/ ctx[1]]));
+    			set_attributes(input_1, input_1_data = get_spread_update(input_1_levels, [dirty & /*$$restProps*/ 2 && /*$$restProps*/ ctx[1]]));
     		},
     		d: function destroy(detaching) {
     			if (detaching) detach_dev(input_1);
-    			/*input_1_binding*/ ctx[14](null);
+    			/*input_1_binding*/ ctx[10](null);
     		}
     	};
 
@@ -5313,8 +5368,8 @@ var app = (function () {
 
     function create_fragment$8(ctx) {
     	let current;
-    	const default_slot_template = /*$$slots*/ ctx[13].default;
-    	const default_slot = create_slot(default_slot_template, ctx, /*$$scope*/ ctx[12], null);
+    	const default_slot_template = /*#slots*/ ctx[9].default;
+    	const default_slot = create_slot(default_slot_template, ctx, /*$$scope*/ ctx[8], null);
     	const default_slot_or_fallback = default_slot || fallback_block(ctx);
 
     	const block = {
@@ -5333,12 +5388,21 @@ var app = (function () {
     		},
     		p: function update(ctx, [dirty]) {
     			if (default_slot) {
-    				if (default_slot.p && dirty & /*$$scope*/ 4096) {
-    					default_slot.p(get_slot_context(default_slot_template, ctx, /*$$scope*/ ctx[12], null), get_slot_changes(default_slot_template, /*$$scope*/ ctx[12], dirty, null));
+    				if (default_slot.p && (!current || dirty & /*$$scope*/ 256)) {
+    					update_slot_base(
+    						default_slot,
+    						default_slot_template,
+    						ctx,
+    						/*$$scope*/ ctx[8],
+    						!current
+    						? get_all_dirty_from_scope(/*$$scope*/ ctx[8])
+    						: get_slot_changes(default_slot_template, /*$$scope*/ ctx[8], dirty, null),
+    						null
+    					);
     				}
     			} else {
-    				if (default_slot_or_fallback && default_slot_or_fallback.p && dirty & /*input*/ 1) {
-    					default_slot_or_fallback.p(ctx, dirty);
+    				if (default_slot_or_fallback && default_slot_or_fallback.p && (!current || dirty & /*$$restProps, input*/ 3)) {
+    					default_slot_or_fallback.p(ctx, !current ? -1 : dirty);
     				}
     			}
     		},
@@ -5374,29 +5438,27 @@ var app = (function () {
     function instance$8($$self, $$props, $$invalidate) {
     	const omit_props_names = ["value","formattedValue","element","dateFormat","options","input","flatpickr"];
     	let $$restProps = compute_rest_props($$props, omit_props_names);
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Flatpickr', slots, ['default']);
 
     	const hooks = new Set([
-    			"onChange",
-    			"onOpen",
-    			"onClose",
-    			"onMonthChange",
-    			"onYearChange",
-    			"onReady",
-    			"onValueUpdate",
-    			"onDayCreate"
+    			'onChange',
+    			'onOpen',
+    			'onClose',
+    			'onMonthChange',
+    			'onYearChange',
+    			'onReady',
+    			'onValueUpdate',
+    			'onDayCreate'
     		]);
 
-    	let { value = "" } = $$props,
-    		{ formattedValue = "" } = $$props,
-    		{ element = null } = $$props,
-    		{ dateFormat = null } = $$props;
-
+    	let { value = '', formattedValue = '', element = null, dateFormat = null } = $$props;
     	let { options = {} } = $$props;
-    	let { input = undefined } = $$props, { flatpickr: fp = undefined } = $$props;
+    	let { input = undefined, flatpickr: fp = undefined } = $$props;
 
     	onMount(() => {
     		const elem = element || input;
-    		$$invalidate(4, fp = flatpickr(elem, Object.assign(addHooks(options), element ? { wrap: true } : {})));
+    		$$invalidate(3, fp = flatpickr(elem, Object.assign(addHooks(options), element ? { wrap: true } : {})));
 
     		return () => {
     			fp.destroy();
@@ -5432,29 +5494,27 @@ var app = (function () {
     		? newValue[0]
     		: newValue);
 
-    		$$invalidate(3, formattedValue = dateStr);
+    		$$invalidate(4, formattedValue = dateStr);
     	}
 
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("Flatpickr", $$slots, ['default']);
-
     	function input_1_binding($$value) {
-    		binding_callbacks[$$value ? "unshift" : "push"](() => {
-    			$$invalidate(0, input = $$value);
+    		binding_callbacks[$$value ? 'unshift' : 'push'](() => {
+    			input = $$value;
+    			$$invalidate(0, input);
     		});
     	}
 
-    	$$self.$set = $$new_props => {
+    	$$self.$$set = $$new_props => {
     		$$props = assign(assign({}, $$props), exclude_internal_props($$new_props));
     		$$invalidate(1, $$restProps = compute_rest_props($$props, omit_props_names));
-    		if ("value" in $$new_props) $$invalidate(2, value = $$new_props.value);
-    		if ("formattedValue" in $$new_props) $$invalidate(3, formattedValue = $$new_props.formattedValue);
-    		if ("element" in $$new_props) $$invalidate(5, element = $$new_props.element);
-    		if ("dateFormat" in $$new_props) $$invalidate(6, dateFormat = $$new_props.dateFormat);
-    		if ("options" in $$new_props) $$invalidate(7, options = $$new_props.options);
-    		if ("input" in $$new_props) $$invalidate(0, input = $$new_props.input);
-    		if ("flatpickr" in $$new_props) $$invalidate(4, fp = $$new_props.flatpickr);
-    		if ("$$scope" in $$new_props) $$invalidate(12, $$scope = $$new_props.$$scope);
+    		if ('value' in $$new_props) $$invalidate(2, value = $$new_props.value);
+    		if ('formattedValue' in $$new_props) $$invalidate(4, formattedValue = $$new_props.formattedValue);
+    		if ('element' in $$new_props) $$invalidate(5, element = $$new_props.element);
+    		if ('dateFormat' in $$new_props) $$invalidate(6, dateFormat = $$new_props.dateFormat);
+    		if ('options' in $$new_props) $$invalidate(7, options = $$new_props.options);
+    		if ('input' in $$new_props) $$invalidate(0, input = $$new_props.input);
+    		if ('flatpickr' in $$new_props) $$invalidate(3, fp = $$new_props.flatpickr);
+    		if ('$$scope' in $$new_props) $$invalidate(8, $$scope = $$new_props.$$scope);
     	};
 
     	$$self.$capture_state = () => ({
@@ -5476,13 +5536,13 @@ var app = (function () {
     	});
 
     	$$self.$inject_state = $$new_props => {
-    		if ("value" in $$props) $$invalidate(2, value = $$new_props.value);
-    		if ("formattedValue" in $$props) $$invalidate(3, formattedValue = $$new_props.formattedValue);
-    		if ("element" in $$props) $$invalidate(5, element = $$new_props.element);
-    		if ("dateFormat" in $$props) $$invalidate(6, dateFormat = $$new_props.dateFormat);
-    		if ("options" in $$props) $$invalidate(7, options = $$new_props.options);
-    		if ("input" in $$props) $$invalidate(0, input = $$new_props.input);
-    		if ("fp" in $$props) $$invalidate(4, fp = $$new_props.fp);
+    		if ('value' in $$props) $$invalidate(2, value = $$new_props.value);
+    		if ('formattedValue' in $$props) $$invalidate(4, formattedValue = $$new_props.formattedValue);
+    		if ('element' in $$props) $$invalidate(5, element = $$new_props.element);
+    		if ('dateFormat' in $$props) $$invalidate(6, dateFormat = $$new_props.dateFormat);
+    		if ('options' in $$props) $$invalidate(7, options = $$new_props.options);
+    		if ('input' in $$props) $$invalidate(0, input = $$new_props.input);
+    		if ('fp' in $$props) $$invalidate(3, fp = $$new_props.fp);
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -5490,13 +5550,13 @@ var app = (function () {
     	}
 
     	$$self.$$.update = () => {
-    		if ($$self.$$.dirty & /*fp, value, dateFormat*/ 84) {
+    		if ($$self.$$.dirty & /*fp, value, dateFormat*/ 76) {
     			 if (fp) {
     				fp.setDate(value, false, dateFormat);
     			}
     		}
 
-    		if ($$self.$$.dirty & /*fp, options*/ 144) {
+    		if ($$self.$$.dirty & /*fp, options*/ 136) {
     			 if (fp) {
     				for (const [key, val] of Object.entries(addHooks(options))) {
     					fp.set(key, val);
@@ -5509,17 +5569,13 @@ var app = (function () {
     		input,
     		$$restProps,
     		value,
-    		formattedValue,
     		fp,
+    		formattedValue,
     		element,
     		dateFormat,
     		options,
-    		hooks,
-    		dispatch,
-    		addHooks,
-    		updateValue,
     		$$scope,
-    		$$slots,
+    		slots,
     		input_1_binding
     	];
     }
@@ -5530,12 +5586,12 @@ var app = (function () {
 
     		init(this, options, instance$8, create_fragment$8, safe_not_equal, {
     			value: 2,
-    			formattedValue: 3,
+    			formattedValue: 4,
     			element: 5,
     			dateFormat: 6,
     			options: 7,
     			input: 0,
-    			flatpickr: 4
+    			flatpickr: 3
     		});
 
     		dispatch_dev("SvelteRegisterComponent", {
@@ -5603,7 +5659,7 @@ var app = (function () {
     	}
     }
 
-    /* src/components/timepicker.svelte generated by Svelte v3.20.1 */
+    /* src/components/timepicker.svelte generated by Svelte v3.46.4 */
     const file$8 = "src/components/timepicker.svelte";
 
     function create_fragment$9(ctx) {
@@ -5611,11 +5667,12 @@ var app = (function () {
     	let t0;
     	let div;
     	let t1;
+    	let flatpickr;
     	let updating_value;
     	let current;
 
     	function flatpickr_value_binding(value) {
-    		/*flatpickr_value_binding*/ ctx[3].call(null, value);
+    		/*flatpickr_value_binding*/ ctx[3](value);
     	}
 
     	let flatpickr_props = {
@@ -5628,8 +5685,8 @@ var app = (function () {
     		flatpickr_props.value = /*date*/ ctx[0];
     	}
 
-    	const flatpickr = new Flatpickr({ props: flatpickr_props, $$inline: true });
-    	binding_callbacks.push(() => bind(flatpickr, "value", flatpickr_value_binding));
+    	flatpickr = new Flatpickr({ props: flatpickr_props, $$inline: true });
+    	binding_callbacks.push(() => bind(flatpickr, 'value', flatpickr_value_binding));
 
     	const block = {
     		c: function create() {
@@ -5695,6 +5752,8 @@ var app = (function () {
     }
 
     function instance$9($$self, $$props, $$invalidate) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Timepicker', slots, []);
     	let { date = new Date() } = $$props;
     	let { disabled = false } = $$props;
 
@@ -5706,23 +5765,20 @@ var app = (function () {
     		}
     	};
 
-    	const writable_props = ["date", "disabled"];
+    	const writable_props = ['date', 'disabled'];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console.warn(`<Timepicker> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<Timepicker> was created with unknown prop '${key}'`);
     	});
-
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("Timepicker", $$slots, []);
 
     	function flatpickr_value_binding(value) {
     		date = value;
     		$$invalidate(0, date);
     	}
 
-    	$$self.$set = $$props => {
-    		if ("date" in $$props) $$invalidate(0, date = $$props.date);
-    		if ("disabled" in $$props) $$invalidate(1, disabled = $$props.disabled);
+    	$$self.$$set = $$props => {
+    		if ('date' in $$props) $$invalidate(0, date = $$props.date);
+    		if ('disabled' in $$props) $$invalidate(1, disabled = $$props.disabled);
     	};
 
     	$$self.$capture_state = () => ({
@@ -5733,8 +5789,8 @@ var app = (function () {
     	});
 
     	$$self.$inject_state = $$props => {
-    		if ("date" in $$props) $$invalidate(0, date = $$props.date);
-    		if ("disabled" in $$props) $$invalidate(1, disabled = $$props.disabled);
+    		if ('date' in $$props) $$invalidate(0, date = $$props.date);
+    		if ('disabled' in $$props) $$invalidate(1, disabled = $$props.disabled);
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -5774,7 +5830,7 @@ var app = (function () {
     	}
     }
 
-    /* src/components/temperature_table.svelte generated by Svelte v3.20.1 */
+    /* src/components/temperature_table.svelte generated by Svelte v3.46.4 */
 
     const file$9 = "src/components/temperature_table.svelte";
 
@@ -5939,39 +5995,38 @@ var app = (function () {
     }
 
     function instance$a($$self, $$props, $$invalidate) {
-    	let { title = "temperature table" } = $$props;
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Temperature_table', slots, []);
+    	let { title = 'temperature table' } = $$props;
 
     	let { table_data = {
-    		"1k": 4.978491,
-    		"4k": 3.070931,
+    		'1k': 4.978491,
+    		'4k': 3.070931,
     		pump: 6.659844,
-    		switch: 17.4195,
-    		hp: 0,
-    		hs: 4,
+    		switch: 17.41950,
+    		hp: 0.000000,
+    		hs: 4.000000,
     		relays: 0
     	} } = $$props;
 
     	let table_array;
-    	const writable_props = ["title", "table_data"];
+    	const writable_props = ['title', 'table_data'];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console.warn(`<Temperature_table> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<Temperature_table> was created with unknown prop '${key}'`);
     	});
 
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("Temperature_table", $$slots, []);
-
-    	$$self.$set = $$props => {
-    		if ("title" in $$props) $$invalidate(0, title = $$props.title);
-    		if ("table_data" in $$props) $$invalidate(2, table_data = $$props.table_data);
+    	$$self.$$set = $$props => {
+    		if ('title' in $$props) $$invalidate(0, title = $$props.title);
+    		if ('table_data' in $$props) $$invalidate(2, table_data = $$props.table_data);
     	};
 
     	$$self.$capture_state = () => ({ title, table_data, table_array });
 
     	$$self.$inject_state = $$props => {
-    		if ("title" in $$props) $$invalidate(0, title = $$props.title);
-    		if ("table_data" in $$props) $$invalidate(2, table_data = $$props.table_data);
-    		if ("table_array" in $$props) $$invalidate(1, table_array = $$props.table_array);
+    		if ('title' in $$props) $$invalidate(0, title = $$props.title);
+    		if ('table_data' in $$props) $$invalidate(2, table_data = $$props.table_data);
+    		if ('table_array' in $$props) $$invalidate(1, table_array = $$props.table_array);
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -11476,7 +11531,7 @@ var app = (function () {
         return a;
     }
 
-    /* src/components/SvgIcon.svelte generated by Svelte v3.20.1 */
+    /* src/components/SvgIcon.svelte generated by Svelte v3.46.4 */
 
     const file$a = "src/components/SvgIcon.svelte";
 
@@ -11537,27 +11592,26 @@ var app = (function () {
     }
 
     function instance$b($$self, $$props, $$invalidate) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('SvgIcon', slots, []);
     	let { fill = "none" } = $$props;
     	let { d = "" } = $$props;
-    	const writable_props = ["fill", "d"];
+    	const writable_props = ['fill', 'd'];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console.warn(`<SvgIcon> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<SvgIcon> was created with unknown prop '${key}'`);
     	});
 
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("SvgIcon", $$slots, []);
-
-    	$$self.$set = $$props => {
-    		if ("fill" in $$props) $$invalidate(0, fill = $$props.fill);
-    		if ("d" in $$props) $$invalidate(1, d = $$props.d);
+    	$$self.$$set = $$props => {
+    		if ('fill' in $$props) $$invalidate(0, fill = $$props.fill);
+    		if ('d' in $$props) $$invalidate(1, d = $$props.d);
     	};
 
     	$$self.$capture_state = () => ({ fill, d });
 
     	$$self.$inject_state = $$props => {
-    		if ("fill" in $$props) $$invalidate(0, fill = $$props.fill);
-    		if ("d" in $$props) $$invalidate(1, d = $$props.d);
+    		if ('fill' in $$props) $$invalidate(0, fill = $$props.fill);
+    		if ('d' in $$props) $$invalidate(1, d = $$props.d);
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -11597,7 +11651,7 @@ var app = (function () {
     	}
     }
 
-    /* src/components/LogIcon.svelte generated by Svelte v3.20.1 */
+    /* src/components/LogIcon.svelte generated by Svelte v3.46.4 */
 
     const file$b = "src/components/LogIcon.svelte";
 
@@ -11667,6 +11721,7 @@ var app = (function () {
     			attr_dev(svg, "height", "24px");
     			attr_dev(svg, "viewBox", "0 -894 1260 899");
     			attr_dev(svg, "xmlns:xlink", "http://www.w3.org/1999/xlink");
+    			attr_dev(svg, "style", "");
     			add_location(svg, file$b, 0, 0, 0);
     		},
     		l: function claim(nodes) {
@@ -11707,14 +11762,14 @@ var app = (function () {
     }
 
     function instance$c($$self, $$props) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('LogIcon', slots, []);
     	const writable_props = [];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console.warn(`<LogIcon> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<LogIcon> was created with unknown prop '${key}'`);
     	});
 
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("LogIcon", $$slots, []);
     	return [];
     }
 
@@ -11732,7 +11787,7 @@ var app = (function () {
     	}
     }
 
-    /* src/components/LinIcon.svelte generated by Svelte v3.20.1 */
+    /* src/components/LinIcon.svelte generated by Svelte v3.46.4 */
 
     const file$c = "src/components/LinIcon.svelte";
 
@@ -11802,6 +11857,7 @@ var app = (function () {
     			attr_dev(svg, "height", "24px");
     			attr_dev(svg, "viewBox", "0 -794 1243 705");
     			attr_dev(svg, "xmlns:xlink", "http://www.w3.org/1999/xlink");
+    			attr_dev(svg, "style", "");
     			add_location(svg, file$c, 0, 0, 0);
     		},
     		l: function claim(nodes) {
@@ -11842,14 +11898,14 @@ var app = (function () {
     }
 
     function instance$d($$self, $$props) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('LinIcon', slots, []);
     	const writable_props = [];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console.warn(`<LinIcon> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<LinIcon> was created with unknown prop '${key}'`);
     	});
 
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("LinIcon", $$slots, []);
     	return [];
     }
 
@@ -11884,15 +11940,16 @@ var app = (function () {
 
     });
 
-    /* src/components/uplot_v3.svelte generated by Svelte v3.20.1 */
+    /* src/components/uplot_v3.svelte generated by Svelte v3.46.4 */
 
     const { console: console_1$2 } = globals;
     const file$d = "src/components/uplot_v3.svelte";
 
-    // (237:12) {:else}
+    // (239:12) {:else}
     function create_else_block$2(ctx) {
+    	let logicon;
     	let current;
-    	const logicon = new LogIcon({ $$inline: true });
+    	logicon = new LogIcon({ $$inline: true });
 
     	const block = {
     		c: function create() {
@@ -11920,17 +11977,18 @@ var app = (function () {
     		block,
     		id: create_else_block$2.name,
     		type: "else",
-    		source: "(237:12) {:else}",
+    		source: "(239:12) {:else}",
     		ctx
     	});
 
     	return block;
     }
 
-    // (235:12) {#if logy==3}
+    // (237:12) {#if logy==3}
     function create_if_block$2(ctx) {
+    	let linicon;
     	let current;
-    	const linicon = new LinIcon({ $$inline: true });
+    	linicon = new LinIcon({ $$inline: true });
 
     	const block = {
     		c: function create() {
@@ -11958,7 +12016,7 @@ var app = (function () {
     		block,
     		id: create_if_block$2.name,
     		type: "if",
-    		source: "(235:12) {#if logy==3}",
+    		source: "(237:12) {#if logy==3}",
     		ctx
     	});
 
@@ -11970,19 +12028,23 @@ var app = (function () {
     	let t0;
     	let div0;
     	let button0;
+    	let svgicon0;
     	let t1;
     	let button1;
     	let current_block_type_index;
     	let if_block;
     	let t2;
     	let button2;
+    	let svgicon1;
     	let t3;
     	let button3;
+    	let svgicon2;
     	let t4;
     	let div1;
     	let current;
+    	let mounted;
     	let dispose;
-    	const svgicon0 = new SvgIcon({ props: { d: home }, $$inline: true });
+    	svgicon0 = new SvgIcon({ props: { d: home }, $$inline: true });
     	const if_block_creators = [create_if_block$2, create_else_block$2];
     	const if_blocks = [];
 
@@ -11993,8 +12055,8 @@ var app = (function () {
 
     	current_block_type_index = select_block_type(ctx);
     	if_block = if_blocks[current_block_type_index] = if_block_creators[current_block_type_index](ctx);
-    	const svgicon1 = new SvgIcon({ props: { d: png }, $$inline: true });
-    	const svgicon2 = new SvgIcon({ props: { d: download }, $$inline: true });
+    	svgicon1 = new SvgIcon({ props: { d: png }, $$inline: true });
+    	svgicon2 = new SvgIcon({ props: { d: download }, $$inline: true });
 
     	const block = {
     		c: function create() {
@@ -12016,22 +12078,22 @@ var app = (function () {
     			div1 = element("div");
     			attr_dev(link, "rel", "stylesheet");
     			attr_dev(link, "href", "https://leeoniya.github.io/uPlot/dist/uPlot.min.css");
-    			add_location(link, file$d, 228, 4, 7091);
+    			add_location(link, file$d, 230, 4, 7099);
     			attr_dev(button0, "class", "svelte-ntrb8o");
-    			add_location(button0, file$d, 230, 8, 7192);
+    			add_location(button0, file$d, 232, 8, 7200);
     			attr_dev(button1, "class", "svelte-ntrb8o");
-    			add_location(button1, file$d, 233, 8, 7281);
+    			add_location(button1, file$d, 235, 8, 7289);
     			attr_dev(button2, "class", "svelte-ntrb8o");
-    			add_location(button2, file$d, 240, 8, 7459);
+    			add_location(button2, file$d, 242, 8, 7467);
     			attr_dev(button3, "class", "svelte-ntrb8o");
-    			add_location(button3, file$d, 243, 8, 7548);
-    			add_location(div0, file$d, 229, 4, 7178);
-    			add_location(div1, file$d, 247, 4, 7651);
+    			add_location(button3, file$d, 245, 8, 7556);
+    			add_location(div0, file$d, 231, 4, 7186);
+    			add_location(div1, file$d, 249, 4, 7659);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
     		},
-    		m: function mount(target, anchor, remount) {
+    		m: function mount(target, anchor) {
     			insert_dev(target, link, anchor);
     			insert_dev(target, t0, anchor);
     			insert_dev(target, div0, anchor);
@@ -12048,16 +12110,19 @@ var app = (function () {
     			mount_component(svgicon2, button3, null);
     			insert_dev(target, t4, anchor);
     			insert_dev(target, div1, anchor);
-    			/*div1_binding*/ ctx[19](div1);
+    			/*div1_binding*/ ctx[9](div1);
     			current = true;
-    			if (remount) run_all(dispose);
 
-    			dispose = [
-    				listen_dev(button0, "click", /*resetAxis*/ ctx[2], false, false, false),
-    				listen_dev(button1, "click", /*toggle_logy*/ ctx[3], false, false, false),
-    				listen_dev(button2, "click", saveCanvas, false, false, false),
-    				listen_dev(button3, "click", /*downloadData*/ ctx[4], false, false, false)
-    			];
+    			if (!mounted) {
+    				dispose = [
+    					listen_dev(button0, "click", /*resetAxis*/ ctx[2], false, false, false),
+    					listen_dev(button1, "click", /*toggle_logy*/ ctx[3], false, false, false),
+    					listen_dev(button2, "click", /*saveCanvas*/ ctx[4], false, false, false),
+    					listen_dev(button3, "click", /*downloadData*/ ctx[5], false, false, false)
+    				];
+
+    				mounted = true;
+    			}
     		},
     		p: function update(ctx, [dirty]) {
     			let previous_block_index = current_block_type_index;
@@ -12107,7 +12172,8 @@ var app = (function () {
     			destroy_component(svgicon2);
     			if (detaching) detach_dev(t4);
     			if (detaching) detach_dev(div1);
-    			/*div1_binding*/ ctx[19](null);
+    			/*div1_binding*/ ctx[9](null);
+    			mounted = false;
     			run_all(dispose);
     		}
     	};
@@ -12123,73 +12189,12 @@ var app = (function () {
     	return block;
     }
 
-    function saveCanvas() {
-    	var canvas = document.querySelector(".u-wrap > canvas:nth-child(2)");
-    	console.log("canvas", canvas);
-
-    	canvas.toBlob(function (blob) {
-    		FileSaver_min.saveAs(blob, "uplot.png");
-    	});
-    }
-
-    function legendAsTooltipPlugin(
-    	{ className, style = {
-    		backgroundColor: "rgba(255, 249, 196, 0.92)",
-    		color: "black"
-    	} } = {}
-    ) {
-    	let legendEl;
-
-    	function init(u, opts) {
-    		legendEl = u.root.querySelector(".u-legend");
-    		legendEl.classList.remove("u-inline");
-    		className && legendEl.classList.add(className);
-
-    		// console.log(legendEl)
-    		uPlot.assign(legendEl.style, {
-    			textAlign: "left",
-    			pointerEvents: "none",
-    			display: "none",
-    			position: "absolute",
-    			left: 0,
-    			top: 0
-    		}); // zIndex: 100,
-    		// boxShadow: "2px 2px 10px rgba(0,0,0,0.5)",
-    		// ...style
-
-    		// hide series color markers
-    		const idents = legendEl.querySelectorAll(".u-marker");
-
-    		for (let i = 0; i < idents.length; i++) idents[i].style.display = "none";
-    		const overEl = u.root.querySelector(".u-over");
-    		overEl.style.overflow = "visible";
-
-    		// move legend into plot bounds
-    		overEl.appendChild(legendEl);
-
-    		// show/hide tooltip on enter/exit
-    		overEl.addEventListener("mouseenter", () => {
-    			legendEl.style.display = null;
-    		});
-
-    		overEl.addEventListener("mouseleave", () => {
-    			legendEl.style.display = "none";
-    		});
-    	} // let tooltip exit plot
-    	//  overEl.style.overflow = "visible";
-
-    	function update(u) {
-    		const { left, top } = u.cursor;
-    		legendEl.style.transform = "translate(" + left + "px, " + top + "px)";
-    	}
-
-    	return { hooks: { init, setCursor: update } };
-    }
-
     function instance$e($$self, $$props, $$invalidate) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Uplot_v3', slots, []);
     	let { data = data_config } = $$props;
     	let { opts = opts_config } = $$props;
-    	let { labels = ["y0", "y1"] } = $$props;
+    	let { labels = ['y0', 'y1'] } = $$props;
     	let plotDiv;
 
     	// let uPlot;
@@ -12224,7 +12229,7 @@ var app = (function () {
     	};
 
     	opts.scales.y.range = (self, min, max) => {
-    		console.log("before", min, max);
+    		console.log('before', min, max);
 
     		if (!autoy) {
     			let max_calc = [];
@@ -12241,13 +12246,11 @@ var app = (function () {
     			min = 0.1;
     			max = 3;
     			y_range = uPlot.rangeNum(min, max, 0.1, true);
-    			
     		} else {
     			y_range = uPlot.rangeNum(0.1, 3, 0.1, true);
-    			
     		}
 
-    		console.log("y:", y_range);
+    		console.log('y:', y_range);
     		return y_range;
     	};
 
@@ -12260,7 +12263,7 @@ var app = (function () {
     */
     	opts.cursor.bind.dblclick = (u, targ, handler) => {
     		return e => {
-    			console.log("in dblclick");
+    			console.log('in dblclick');
     			autox = true;
     			autoy = true;
     			handler(e);
@@ -12295,7 +12298,7 @@ var app = (function () {
     	// console.log('opts.series', opts.series)
     	// console.log('labels', labels);
     	labels.forEach((item, index) => {
-    		$$invalidate(5, opts.series[index + 1].label = item, opts); // offset index by 1, index 0: time
+    		$$invalidate(6, opts.series[index + 1].label = item, opts); // offset index by 1, index 0: time
     	});
 
     	let mounted = false;
@@ -12317,8 +12320,10 @@ var app = (function () {
     console.log(html2canvas)
      */
 
-    	//$: {console.log('data changed into uPlot, data.length', data.length);}
-    	//  $: {console.log('labels changed into uPlot, label.length', labels.length);}
+    	/*
+    $: {console.log('data changed into uPlot, data.length', data.length);}
+    $: {console.log('labels changed into uPlot, label.length', labels.length);}
+    */
     	afterUpdate(() => {
     		// console.log('afterUpdate data[0].length', data[0].length)
     		if (mounted) {
@@ -12347,7 +12352,7 @@ var app = (function () {
     			$$invalidate(1, logy = 3);
     		}
 
-    		$$invalidate(5, opts.scales.y.distr = logy, opts);
+    		$$invalidate(6, opts.scales.y.distr = logy, opts);
 
     		// Not sure which way is better...
     		// plotDiv.innerHTML = '';
@@ -12355,6 +12360,15 @@ var app = (function () {
 
     		// console.log('toggle_logy', data.length);
     		uplot = new uPlot(opts, data, plotDiv);
+    	}
+
+    	function saveCanvas() {
+    		var canvas = document.querySelector(".u-wrap > canvas:nth-child(2)");
+    		console.log("canvas", canvas);
+
+    		canvas.toBlob(function (blob) {
+    			FileSaver_min.saveAs(blob, "uplot.png");
+    		});
     	}
 
     	function saveCanvas2() {
@@ -12365,30 +12379,82 @@ var app = (function () {
 
     	function downloadData() {
     		console.log("Download file");
-    		const filename = "fridge.json";
-    		const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+    		const filename = 'fridge.json';
+    		const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
     		downloadBlob(blob, filename);
     	}
 
-    	const writable_props = ["data", "opts", "labels"];
+    	function legendAsTooltipPlugin(
+    		{ className, style = {
+    			backgroundColor: "rgba(255, 249, 196, 0.92)",
+    			color: "black"
+    		} } = {}
+    	) {
+    		let legendEl;
+
+    		function init(u, opts) {
+    			legendEl = u.root.querySelector(".u-legend");
+    			legendEl.classList.remove("u-inline");
+    			className && legendEl.classList.add(className);
+
+    			// console.log(legendEl)
+    			uPlot.assign(legendEl.style, {
+    				textAlign: "left",
+    				pointerEvents: "none",
+    				display: "none",
+    				position: "absolute",
+    				left: 0,
+    				top: 0
+    			}); // zIndex: 100,
+    			// boxShadow: "2px 2px 10px rgba(0,0,0,0.5)",
+    			// ...style
+
+    			// hide series color markers
+    			const idents = legendEl.querySelectorAll(".u-marker");
+
+    			for (let i = 0; i < idents.length; i++) idents[i].style.display = "none";
+    			const overEl = u.root.querySelector(".u-over");
+    			overEl.style.overflow = "visible";
+
+    			// move legend into plot bounds
+    			overEl.appendChild(legendEl);
+
+    			// show/hide tooltip on enter/exit
+    			overEl.addEventListener("mouseenter", () => {
+    				legendEl.style.display = null;
+    			});
+
+    			overEl.addEventListener("mouseleave", () => {
+    				legendEl.style.display = "none";
+    			});
+    		} // let tooltip exit plot
+    		//  overEl.style.overflow = "visible";
+
+    		function update(u) {
+    			const { left, top } = u.cursor;
+    			legendEl.style.transform = "translate(" + left + "px, " + top + "px)";
+    		}
+
+    		return { hooks: { init, setCursor: update } };
+    	}
+
+    	const writable_props = ['data', 'opts', 'labels'];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console_1$2.warn(`<Uplot_v3> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console_1$2.warn(`<Uplot_v3> was created with unknown prop '${key}'`);
     	});
 
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("Uplot_v3", $$slots, []);
-
     	function div1_binding($$value) {
-    		binding_callbacks[$$value ? "unshift" : "push"](() => {
-    			$$invalidate(0, plotDiv = $$value);
+    		binding_callbacks[$$value ? 'unshift' : 'push'](() => {
+    			plotDiv = $$value;
+    			$$invalidate(0, plotDiv);
     		});
     	}
 
-    	$$self.$set = $$props => {
-    		if ("data" in $$props) $$invalidate(6, data = $$props.data);
-    		if ("opts" in $$props) $$invalidate(5, opts = $$props.opts);
-    		if ("labels" in $$props) $$invalidate(7, labels = $$props.labels);
+    	$$self.$$set = $$props => {
+    		if ('data' in $$props) $$invalidate(7, data = $$props.data);
+    		if ('opts' in $$props) $$invalidate(6, opts = $$props.opts);
+    		if ('labels' in $$props) $$invalidate(8, labels = $$props.labels);
     	};
 
     	$$self.$capture_state = () => ({
@@ -12431,19 +12497,19 @@ var app = (function () {
     	});
 
     	$$self.$inject_state = $$props => {
-    		if ("data" in $$props) $$invalidate(6, data = $$props.data);
-    		if ("opts" in $$props) $$invalidate(5, opts = $$props.opts);
-    		if ("labels" in $$props) $$invalidate(7, labels = $$props.labels);
-    		if ("plotDiv" in $$props) $$invalidate(0, plotDiv = $$props.plotDiv);
-    		if ("uplot" in $$props) uplot = $$props.uplot;
-    		if ("html2canvas" in $$props) html2canvas = $$props.html2canvas;
-    		if ("autox" in $$props) autox = $$props.autox;
-    		if ("autoy" in $$props) autoy = $$props.autoy;
-    		if ("logy" in $$props) $$invalidate(1, logy = $$props.logy);
-    		if ("y_range" in $$props) y_range = $$props.y_range;
-    		if ("x_range" in $$props) x_range = $$props.x_range;
-    		if ("s" in $$props) s = $$props.s;
-    		if ("mounted" in $$props) mounted = $$props.mounted;
+    		if ('data' in $$props) $$invalidate(7, data = $$props.data);
+    		if ('opts' in $$props) $$invalidate(6, opts = $$props.opts);
+    		if ('labels' in $$props) $$invalidate(8, labels = $$props.labels);
+    		if ('plotDiv' in $$props) $$invalidate(0, plotDiv = $$props.plotDiv);
+    		if ('uplot' in $$props) uplot = $$props.uplot;
+    		if ('html2canvas' in $$props) html2canvas = $$props.html2canvas;
+    		if ('autox' in $$props) autox = $$props.autox;
+    		if ('autoy' in $$props) autoy = $$props.autoy;
+    		if ('logy' in $$props) $$invalidate(1, logy = $$props.logy);
+    		if ('y_range' in $$props) y_range = $$props.y_range;
+    		if ('x_range' in $$props) x_range = $$props.x_range;
+    		if ('s' in $$props) s = $$props.s;
+    		if ('mounted' in $$props) mounted = $$props.mounted;
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -12455,21 +12521,11 @@ var app = (function () {
     		logy,
     		resetAxis,
     		toggle_logy,
+    		saveCanvas,
     		downloadData,
     		opts,
     		data,
     		labels,
-    		uplot,
-    		autox,
-    		autoy,
-    		y_range,
-    		x_range,
-    		mounted,
-    		html2canvas,
-    		s,
-    		toggle_autox,
-    		toggle_autoy,
-    		saveCanvas2,
     		div1_binding
     	];
     }
@@ -12477,7 +12533,7 @@ var app = (function () {
     class Uplot_v3 extends SvelteComponentDev {
     	constructor(options) {
     		super(options);
-    		init(this, options, instance$e, create_fragment$e, safe_not_equal, { data: 6, opts: 5, labels: 7 });
+    		init(this, options, instance$e, create_fragment$e, safe_not_equal, { data: 7, opts: 6, labels: 8 });
 
     		dispatch_dev("SvelteRegisterComponent", {
     			component: this,
@@ -12512,7 +12568,7 @@ var app = (function () {
     	}
     }
 
-    /* src/components/Loader.svelte generated by Svelte v3.20.1 */
+    /* src/components/Loader.svelte generated by Svelte v3.46.4 */
 
     const file$e = "src/components/Loader.svelte";
 
@@ -12558,24 +12614,23 @@ var app = (function () {
     }
 
     function instance$f($$self, $$props, $$invalidate) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Loader', slots, []);
     	let { loading = false } = $$props;
-    	const writable_props = ["loading"];
+    	const writable_props = ['loading'];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console.warn(`<Loader> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<Loader> was created with unknown prop '${key}'`);
     	});
 
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("Loader", $$slots, []);
-
-    	$$self.$set = $$props => {
-    		if ("loading" in $$props) $$invalidate(0, loading = $$props.loading);
+    	$$self.$$set = $$props => {
+    		if ('loading' in $$props) $$invalidate(0, loading = $$props.loading);
     	};
 
     	$$self.$capture_state = () => ({ loading });
 
     	$$self.$inject_state = $$props => {
-    		if ("loading" in $$props) $$invalidate(0, loading = $$props.loading);
+    		if ('loading' in $$props) $$invalidate(0, loading = $$props.loading);
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -12607,208 +12662,237 @@ var app = (function () {
     	}
     }
 
-    /* src/components/CollapsibleSection.svelte generated by Svelte v3.20.1 */
+    function collapse (node, params) {
 
-    const file$f = "src/components/CollapsibleSection.svelte";
+        const defaultParams = {
+            open: true,
+            duration: 0.2,
+            easing: 'ease'
+        };
 
-    function get_each_context$2(ctx, list, i) {
-    	const child_ctx = ctx.slice();
-    	child_ctx[7] = list[i];
-    	return child_ctx;
+        params = Object.assign(defaultParams, params);
+
+        const noop = () => {};
+        let transitionEndResolve = noop;
+        let transitionEndReject = noop;
+
+        const listener = node.addEventListener('transitionend', () => {
+            transitionEndResolve();
+            transitionEndResolve = noop;
+            transitionEndReject = noop;
+        });
+
+        // convenience functions
+        async function asyncTransitionEnd () {
+            return new Promise((resolve, reject) => {
+                transitionEndResolve = resolve;
+                transitionEndReject = reject;
+            })
+        }
+
+        async function nextFrame () {
+            return new Promise(requestAnimationFrame)
+        }
+
+        function transition () {
+            return `height ${params.duration}s ${params.easing}`
+        }
+
+        // set initial styles
+        node.style.overflow = 'hidden';
+        node.style.transition = transition();
+        node.style.height = params.open ? 'auto' : '0px';
+
+        async function enter () {
+
+            // height is already in pixels
+            // start the transition
+            node.style.height = node.scrollHeight + 'px';
+
+            // wait for transition to end,
+            // then switch back to height auto
+            try {
+                await asyncTransitionEnd();
+                node.style.height = 'auto';
+            } catch(err) {
+                // interrupted by a leave transition
+            }
+
+        }
+
+        async function leave () {
+
+            if (node.style.height === 'auto') {
+
+                // temporarily turn transitions off
+                node.style.transition = 'none';
+                await nextFrame();
+
+                // set height to pixels, and turn transition back on
+                node.style.height = node.scrollHeight + 'px';
+                node.style.transition = transition();
+                await nextFrame();
+
+                // start the transition
+                node.style.height = '0px';
+
+            }
+            else {
+
+                // we are interrupting an enter transition
+                transitionEndReject();
+                node.style.height = '0px';
+
+            }
+
+        }
+
+        function update (newParams) {
+            params = Object.assign(params, newParams);
+            params.open ? enter() : leave();
+        }
+
+        function destroy () {
+            node.removeEventListener('transitionend', listener);
+        }
+
+        return { update, destroy }
+
     }
 
-    // (22:3) {#each menu as item}
-    function create_each_block$2(ctx) {
-    	let label;
-    	let input;
-    	let input_value_value;
-    	let t0;
-    	let t1_value = /*item*/ ctx[7] + "";
-    	let t1;
-    	let t2;
-    	let dispose;
-
-    	const block = {
-    		c: function create() {
-    			label = element("label");
-    			input = element("input");
-    			t0 = space();
-    			t1 = text(t1_value);
-    			t2 = space();
-    			attr_dev(input, "type", "checkbox");
-    			attr_dev(input, "name", "choices");
-    			input.__value = input_value_value = /*item*/ ctx[7];
-    			input.value = input.__value;
-    			/*$$binding_groups*/ ctx[6][0].push(input);
-    			add_location(input, file$f, 23, 5, 709);
-    			add_location(label, file$f, 22, 4, 696);
-    		},
-    		m: function mount(target, anchor, remount) {
-    			insert_dev(target, label, anchor);
-    			append_dev(label, input);
-    			input.checked = ~/*choices*/ ctx[1].indexOf(input.__value);
-    			append_dev(label, t0);
-    			append_dev(label, t1);
-    			append_dev(label, t2);
-    			if (remount) dispose();
-    			dispose = listen_dev(input, "change", /*input_change_handler*/ ctx[5]);
-    		},
-    		p: function update(ctx, dirty) {
-    			if (dirty & /*menu*/ 8 && input_value_value !== (input_value_value = /*item*/ ctx[7])) {
-    				prop_dev(input, "__value", input_value_value);
-    			}
-
-    			input.value = input.__value;
-
-    			if (dirty & /*choices*/ 2) {
-    				input.checked = ~/*choices*/ ctx[1].indexOf(input.__value);
-    			}
-
-    			if (dirty & /*menu*/ 8 && t1_value !== (t1_value = /*item*/ ctx[7] + "")) set_data_dev(t1, t1_value);
-    		},
-    		d: function destroy(detaching) {
-    			if (detaching) detach_dev(label);
-    			/*$$binding_groups*/ ctx[6][0].splice(/*$$binding_groups*/ ctx[6][0].indexOf(input), 1);
-    			dispose();
-    		}
-    	};
-
-    	dispatch_dev("SvelteRegisterBlock", {
-    		block,
-    		id: create_each_block$2.name,
-    		type: "each",
-    		source: "(22:3) {#each menu as item}",
-    		ctx
-    	});
-
-    	return block;
-    }
+    /* app/node_modules/svelte-collapsible/src/components/CollapsibleCard.svelte generated by Svelte v3.46.4 */
+    const file$f = "app/node_modules/svelte-collapsible/src/components/CollapsibleCard.svelte";
+    const get_body_slot_changes = dirty => ({});
+    const get_body_slot_context = ctx => ({});
+    const get_header_slot_changes = dirty => ({});
+    const get_header_slot_context = ctx => ({});
 
     function create_fragment$g(ctx) {
-    	let div1;
-    	let h3;
-    	let button;
-    	let t0;
-    	let t1;
-    	let svg;
-    	let path0;
-    	let path1;
-    	let t2;
+    	let div2;
     	let div0;
-    	let div0_hidden_value;
+    	let t;
+    	let div1;
+    	let collapse_action;
+    	let current;
+    	let mounted;
     	let dispose;
-    	let each_value = /*menu*/ ctx[3];
-    	validate_each_argument(each_value);
-    	let each_blocks = [];
-
-    	for (let i = 0; i < each_value.length; i += 1) {
-    		each_blocks[i] = create_each_block$2(get_each_context$2(ctx, each_value, i));
-    	}
+    	const header_slot_template = /*#slots*/ ctx[5].header;
+    	const header_slot = create_slot(header_slot_template, ctx, /*$$scope*/ ctx[4], get_header_slot_context);
+    	const body_slot_template = /*#slots*/ ctx[5].body;
+    	const body_slot = create_slot(body_slot_template, ctx, /*$$scope*/ ctx[4], get_body_slot_context);
 
     	const block = {
     		c: function create() {
-    			div1 = element("div");
-    			h3 = element("h3");
-    			button = element("button");
-    			t0 = text(/*headerText*/ ctx[2]);
-    			t1 = space();
-    			svg = svg_element("svg");
-    			path0 = svg_element("path");
-    			path1 = svg_element("path");
-    			t2 = space();
+    			div2 = element("div");
     			div0 = element("div");
-
-    			for (let i = 0; i < each_blocks.length; i += 1) {
-    				each_blocks[i].c();
-    			}
-
-    			attr_dev(path0, "class", "vert svelte-17lrub9");
-    			attr_dev(path0, "d", "M10 1V19");
-    			attr_dev(path0, "stroke", "black");
-    			attr_dev(path0, "stroke-width", "2");
-    			add_location(path0, file$f, 14, 0, 460);
-    			attr_dev(path1, "d", "M1 10L19 10");
-    			attr_dev(path1, "stroke", "black");
-    			attr_dev(path1, "stroke-width", "2");
-    			add_location(path1, file$f, 15, 0, 526);
-    			attr_dev(svg, "viewBox", "0 0 20 20");
-    			attr_dev(svg, "fill", "none");
-    			attr_dev(svg, "class", "svelte-17lrub9");
-    			add_location(svg, file$f, 13, 0, 421);
-    			attr_dev(button, "aria-expanded", /*expanded*/ ctx[0]);
-    			attr_dev(button, "class", "svelte-17lrub9");
-    			add_location(button, file$f, 12, 8, 337);
-    			attr_dev(h3, "class", "svelte-17lrub9");
-    			add_location(h3, file$f, 11, 4, 324);
-    			attr_dev(div0, "class", "contents svelte-17lrub9");
-    			div0.hidden = div0_hidden_value = !/*expanded*/ ctx[0];
-    			add_location(div0, file$f, 20, 4, 626);
-    			attr_dev(div1, "class", "collapsible svelte-17lrub9");
-    			add_location(div1, file$f, 10, 0, 294);
+    			if (header_slot) header_slot.c();
+    			t = space();
+    			div1 = element("div");
+    			if (body_slot) body_slot.c();
+    			attr_dev(div0, "class", "card-header svelte-yon7im");
+    			add_location(div0, file$f, 29, 4, 485);
+    			attr_dev(div1, "class", "card-body");
+    			add_location(div1, file$f, 33, 4, 581);
+    			attr_dev(div2, "class", "card");
+    			attr_dev(div2, "aria-expanded", /*open*/ ctx[0]);
+    			toggle_class(div2, "open", /*open*/ ctx[0]);
+    			add_location(div2, file$f, 27, 0, 429);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
     		},
-    		m: function mount(target, anchor, remount) {
-    			insert_dev(target, div1, anchor);
-    			append_dev(div1, h3);
-    			append_dev(h3, button);
-    			append_dev(button, t0);
-    			append_dev(button, t1);
-    			append_dev(button, svg);
-    			append_dev(svg, path0);
-    			append_dev(svg, path1);
-    			append_dev(div1, t2);
-    			append_dev(div1, div0);
+    		m: function mount(target, anchor) {
+    			insert_dev(target, div2, anchor);
+    			append_dev(div2, div0);
 
-    			for (let i = 0; i < each_blocks.length; i += 1) {
-    				each_blocks[i].m(div0, null);
+    			if (header_slot) {
+    				header_slot.m(div0, null);
     			}
 
-    			if (remount) dispose();
-    			dispose = listen_dev(button, "click", /*click_handler*/ ctx[4], false, false, false);
+    			append_dev(div2, t);
+    			append_dev(div2, div1);
+
+    			if (body_slot) {
+    				body_slot.m(div1, null);
+    			}
+
+    			current = true;
+
+    			if (!mounted) {
+    				dispose = [
+    					listen_dev(div0, "click", /*handleToggle*/ ctx[3], false, false, false),
+    					action_destroyer(collapse_action = collapse.call(null, div1, {
+    						open: /*open*/ ctx[0],
+    						duration: /*duration*/ ctx[1],
+    						easing: /*easing*/ ctx[2]
+    					}))
+    				];
+
+    				mounted = true;
+    			}
     		},
     		p: function update(ctx, [dirty]) {
-    			if (dirty & /*headerText*/ 4) set_data_dev(t0, /*headerText*/ ctx[2]);
-
-    			if (dirty & /*expanded*/ 1) {
-    				attr_dev(button, "aria-expanded", /*expanded*/ ctx[0]);
+    			if (header_slot) {
+    				if (header_slot.p && (!current || dirty & /*$$scope*/ 16)) {
+    					update_slot_base(
+    						header_slot,
+    						header_slot_template,
+    						ctx,
+    						/*$$scope*/ ctx[4],
+    						!current
+    						? get_all_dirty_from_scope(/*$$scope*/ ctx[4])
+    						: get_slot_changes(header_slot_template, /*$$scope*/ ctx[4], dirty, get_header_slot_changes),
+    						get_header_slot_context
+    					);
+    				}
     			}
 
-    			if (dirty & /*menu, choices*/ 10) {
-    				each_value = /*menu*/ ctx[3];
-    				validate_each_argument(each_value);
-    				let i;
-
-    				for (i = 0; i < each_value.length; i += 1) {
-    					const child_ctx = get_each_context$2(ctx, each_value, i);
-
-    					if (each_blocks[i]) {
-    						each_blocks[i].p(child_ctx, dirty);
-    					} else {
-    						each_blocks[i] = create_each_block$2(child_ctx);
-    						each_blocks[i].c();
-    						each_blocks[i].m(div0, null);
-    					}
+    			if (body_slot) {
+    				if (body_slot.p && (!current || dirty & /*$$scope*/ 16)) {
+    					update_slot_base(
+    						body_slot,
+    						body_slot_template,
+    						ctx,
+    						/*$$scope*/ ctx[4],
+    						!current
+    						? get_all_dirty_from_scope(/*$$scope*/ ctx[4])
+    						: get_slot_changes(body_slot_template, /*$$scope*/ ctx[4], dirty, get_body_slot_changes),
+    						get_body_slot_context
+    					);
     				}
-
-    				for (; i < each_blocks.length; i += 1) {
-    					each_blocks[i].d(1);
-    				}
-
-    				each_blocks.length = each_value.length;
     			}
 
-    			if (dirty & /*expanded*/ 1 && div0_hidden_value !== (div0_hidden_value = !/*expanded*/ ctx[0])) {
-    				prop_dev(div0, "hidden", div0_hidden_value);
+    			if (collapse_action && is_function(collapse_action.update) && dirty & /*open, duration, easing*/ 7) collapse_action.update.call(null, {
+    				open: /*open*/ ctx[0],
+    				duration: /*duration*/ ctx[1],
+    				easing: /*easing*/ ctx[2]
+    			});
+
+    			if (!current || dirty & /*open*/ 1) {
+    				attr_dev(div2, "aria-expanded", /*open*/ ctx[0]);
+    			}
+
+    			if (dirty & /*open*/ 1) {
+    				toggle_class(div2, "open", /*open*/ ctx[0]);
     			}
     		},
-    		i: noop,
-    		o: noop,
+    		i: function intro(local) {
+    			if (current) return;
+    			transition_in(header_slot, local);
+    			transition_in(body_slot, local);
+    			current = true;
+    		},
+    		o: function outro(local) {
+    			transition_out(header_slot, local);
+    			transition_out(body_slot, local);
+    			current = false;
+    		},
     		d: function destroy(detaching) {
-    			if (detaching) detach_dev(div1);
-    			destroy_each(each_blocks, detaching);
-    			dispose();
+    			if (detaching) detach_dev(div2);
+    			if (header_slot) header_slot.d(detaching);
+    			if (body_slot) body_slot.d(detaching);
+    			mounted = false;
+    			run_all(dispose);
     		}
     	};
 
@@ -12824,40 +12908,388 @@ var app = (function () {
     }
 
     function instance$g($$self, $$props, $$invalidate) {
-    	let { headerText } = $$props;
-    	let { expanded = false } = $$props;
-    	let { menu = ["A", "B", "C"] } = $$props;
-    	let { choices = [...menu] } = $$props;
-    	const writable_props = ["headerText", "expanded", "menu", "choices"];
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('CollapsibleCard', slots, ['header','body']);
+    	let { open = true } = $$props;
+    	let { duration = 0.2 } = $$props;
+    	let { easing = 'ease' } = $$props;
+    	const dispatch = createEventDispatcher();
 
-    	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console.warn(`<CollapsibleSection> was created with unknown prop '${key}'`);
-    	});
+    	function handleToggle() {
+    		$$invalidate(0, open = !open);
 
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("CollapsibleSection", $$slots, []);
-    	const $$binding_groups = [[]];
-    	const click_handler = () => $$invalidate(0, expanded = !expanded);
-
-    	function input_change_handler() {
-    		choices = get_binding_group_value($$binding_groups[0]);
-    		$$invalidate(1, choices);
+    		if (open) {
+    			dispatch('open');
+    		} else {
+    			dispatch('close');
+    		}
     	}
 
-    	$$self.$set = $$props => {
-    		if ("headerText" in $$props) $$invalidate(2, headerText = $$props.headerText);
-    		if ("expanded" in $$props) $$invalidate(0, expanded = $$props.expanded);
-    		if ("menu" in $$props) $$invalidate(3, menu = $$props.menu);
-    		if ("choices" in $$props) $$invalidate(1, choices = $$props.choices);
+    	const writable_props = ['open', 'duration', 'easing'];
+
+    	Object.keys($$props).forEach(key => {
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<CollapsibleCard> was created with unknown prop '${key}'`);
+    	});
+
+    	$$self.$$set = $$props => {
+    		if ('open' in $$props) $$invalidate(0, open = $$props.open);
+    		if ('duration' in $$props) $$invalidate(1, duration = $$props.duration);
+    		if ('easing' in $$props) $$invalidate(2, easing = $$props.easing);
+    		if ('$$scope' in $$props) $$invalidate(4, $$scope = $$props.$$scope);
     	};
 
-    	$$self.$capture_state = () => ({ headerText, expanded, menu, choices });
+    	$$self.$capture_state = () => ({
+    		createEventDispatcher,
+    		collapse,
+    		open,
+    		duration,
+    		easing,
+    		dispatch,
+    		handleToggle
+    	});
 
     	$$self.$inject_state = $$props => {
-    		if ("headerText" in $$props) $$invalidate(2, headerText = $$props.headerText);
-    		if ("expanded" in $$props) $$invalidate(0, expanded = $$props.expanded);
-    		if ("menu" in $$props) $$invalidate(3, menu = $$props.menu);
-    		if ("choices" in $$props) $$invalidate(1, choices = $$props.choices);
+    		if ('open' in $$props) $$invalidate(0, open = $$props.open);
+    		if ('duration' in $$props) $$invalidate(1, duration = $$props.duration);
+    		if ('easing' in $$props) $$invalidate(2, easing = $$props.easing);
+    	};
+
+    	if ($$props && "$$inject" in $$props) {
+    		$$self.$inject_state($$props.$$inject);
+    	}
+
+    	return [open, duration, easing, handleToggle, $$scope, slots];
+    }
+
+    class CollapsibleCard extends SvelteComponentDev {
+    	constructor(options) {
+    		super(options);
+    		init(this, options, instance$g, create_fragment$g, safe_not_equal, { open: 0, duration: 1, easing: 2 });
+
+    		dispatch_dev("SvelteRegisterComponent", {
+    			component: this,
+    			tagName: "CollapsibleCard",
+    			options,
+    			id: create_fragment$g.name
+    		});
+    	}
+
+    	get open() {
+    		throw new Error("<CollapsibleCard>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set open(value) {
+    		throw new Error("<CollapsibleCard>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get duration() {
+    		throw new Error("<CollapsibleCard>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set duration(value) {
+    		throw new Error("<CollapsibleCard>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get easing() {
+    		throw new Error("<CollapsibleCard>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set easing(value) {
+    		throw new Error("<CollapsibleCard>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+    }
+
+    /* src/components/ConfigKeys.svelte generated by Svelte v3.46.4 */
+    const file$g = "src/components/ConfigKeys.svelte";
+
+    function get_each_context$2(ctx, list, i) {
+    	const child_ctx = ctx.slice();
+    	child_ctx[7] = list[i];
+    	return child_ctx;
+    }
+
+    // (9:4) 
+    function create_header_slot(ctx) {
+    	let h4;
+    	let t;
+
+    	const block = {
+    		c: function create() {
+    			h4 = element("h4");
+    			t = text(/*label*/ ctx[1]);
+    			attr_dev(h4, "slot", "header");
+    			attr_dev(h4, "class", "header");
+    			add_location(h4, file$g, 8, 4, 245);
+    		},
+    		m: function mount(target, anchor) {
+    			insert_dev(target, h4, anchor);
+    			append_dev(h4, t);
+    		},
+    		p: function update(ctx, dirty) {
+    			if (dirty & /*label*/ 2) set_data_dev(t, /*label*/ ctx[1]);
+    		},
+    		d: function destroy(detaching) {
+    			if (detaching) detach_dev(h4);
+    		}
+    	};
+
+    	dispatch_dev("SvelteRegisterBlock", {
+    		block,
+    		id: create_header_slot.name,
+    		type: "slot",
+    		source: "(9:4) ",
+    		ctx
+    	});
+
+    	return block;
+    }
+
+    // (11:4) {#each menu as item}
+    function create_each_block$2(ctx) {
+    	let label_1;
+    	let input;
+    	let input_value_value;
+    	let t0;
+    	let t1_value = /*item*/ ctx[7] + "";
+    	let t1;
+    	let t2;
+    	let mounted;
+    	let dispose;
+
+    	const block = {
+    		c: function create() {
+    			label_1 = element("label");
+    			input = element("input");
+    			t0 = space();
+    			t1 = text(t1_value);
+    			t2 = space();
+    			attr_dev(input, "type", "checkbox");
+    			attr_dev(input, "name", "choices");
+    			input.__value = input_value_value = /*item*/ ctx[7];
+    			input.value = input.__value;
+    			/*$$binding_groups*/ ctx[4][0].push(input);
+    			add_location(input, file$g, 12, 12, 377);
+    			add_location(label_1, file$g, 11, 8, 357);
+    		},
+    		m: function mount(target, anchor) {
+    			insert_dev(target, label_1, anchor);
+    			append_dev(label_1, input);
+    			input.checked = ~/*choices*/ ctx[0].indexOf(input.__value);
+    			append_dev(label_1, t0);
+    			append_dev(label_1, t1);
+    			append_dev(label_1, t2);
+
+    			if (!mounted) {
+    				dispose = listen_dev(input, "change", /*input_change_handler*/ ctx[3]);
+    				mounted = true;
+    			}
+    		},
+    		p: function update(ctx, dirty) {
+    			if (dirty & /*menu*/ 4 && input_value_value !== (input_value_value = /*item*/ ctx[7])) {
+    				prop_dev(input, "__value", input_value_value);
+    				input.value = input.__value;
+    			}
+
+    			if (dirty & /*choices*/ 1) {
+    				input.checked = ~/*choices*/ ctx[0].indexOf(input.__value);
+    			}
+
+    			if (dirty & /*menu*/ 4 && t1_value !== (t1_value = /*item*/ ctx[7] + "")) set_data_dev(t1, t1_value);
+    		},
+    		d: function destroy(detaching) {
+    			if (detaching) detach_dev(label_1);
+    			/*$$binding_groups*/ ctx[4][0].splice(/*$$binding_groups*/ ctx[4][0].indexOf(input), 1);
+    			mounted = false;
+    			dispose();
+    		}
+    	};
+
+    	dispatch_dev("SvelteRegisterBlock", {
+    		block,
+    		id: create_each_block$2.name,
+    		type: "each",
+    		source: "(11:4) {#each menu as item}",
+    		ctx
+    	});
+
+    	return block;
+    }
+
+    // (10:4) 
+    function create_body_slot(ctx) {
+    	let p;
+    	let each_value = /*menu*/ ctx[2];
+    	validate_each_argument(each_value);
+    	let each_blocks = [];
+
+    	for (let i = 0; i < each_value.length; i += 1) {
+    		each_blocks[i] = create_each_block$2(get_each_context$2(ctx, each_value, i));
+    	}
+
+    	const block = {
+    		c: function create() {
+    			p = element("p");
+
+    			for (let i = 0; i < each_blocks.length; i += 1) {
+    				each_blocks[i].c();
+    			}
+
+    			attr_dev(p, "slot", "body");
+    			attr_dev(p, "class", "body");
+    			add_location(p, file$g, 9, 4, 295);
+    		},
+    		m: function mount(target, anchor) {
+    			insert_dev(target, p, anchor);
+
+    			for (let i = 0; i < each_blocks.length; i += 1) {
+    				each_blocks[i].m(p, null);
+    			}
+    		},
+    		p: function update(ctx, dirty) {
+    			if (dirty & /*menu, choices*/ 5) {
+    				each_value = /*menu*/ ctx[2];
+    				validate_each_argument(each_value);
+    				let i;
+
+    				for (i = 0; i < each_value.length; i += 1) {
+    					const child_ctx = get_each_context$2(ctx, each_value, i);
+
+    					if (each_blocks[i]) {
+    						each_blocks[i].p(child_ctx, dirty);
+    					} else {
+    						each_blocks[i] = create_each_block$2(child_ctx);
+    						each_blocks[i].c();
+    						each_blocks[i].m(p, null);
+    					}
+    				}
+
+    				for (; i < each_blocks.length; i += 1) {
+    					each_blocks[i].d(1);
+    				}
+
+    				each_blocks.length = each_value.length;
+    			}
+    		},
+    		d: function destroy(detaching) {
+    			if (detaching) detach_dev(p);
+    			destroy_each(each_blocks, detaching);
+    		}
+    	};
+
+    	dispatch_dev("SvelteRegisterBlock", {
+    		block,
+    		id: create_body_slot.name,
+    		type: "slot",
+    		source: "(10:4) ",
+    		ctx
+    	});
+
+    	return block;
+    }
+
+    function create_fragment$h(ctx) {
+    	let collapsiblecard;
+    	let current;
+
+    	collapsiblecard = new CollapsibleCard({
+    			props: {
+    				open: false,
+    				$$slots: {
+    					body: [create_body_slot],
+    					header: [create_header_slot]
+    				},
+    				$$scope: { ctx }
+    			},
+    			$$inline: true
+    		});
+
+    	collapsiblecard.$on("open", /*open_handler*/ ctx[5]);
+    	collapsiblecard.$on("close", /*close_handler*/ ctx[6]);
+
+    	const block = {
+    		c: function create() {
+    			create_component(collapsiblecard.$$.fragment);
+    		},
+    		l: function claim(nodes) {
+    			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
+    		},
+    		m: function mount(target, anchor) {
+    			mount_component(collapsiblecard, target, anchor);
+    			current = true;
+    		},
+    		p: function update(ctx, [dirty]) {
+    			const collapsiblecard_changes = {};
+
+    			if (dirty & /*$$scope, menu, choices, label*/ 1031) {
+    				collapsiblecard_changes.$$scope = { dirty, ctx };
+    			}
+
+    			collapsiblecard.$set(collapsiblecard_changes);
+    		},
+    		i: function intro(local) {
+    			if (current) return;
+    			transition_in(collapsiblecard.$$.fragment, local);
+    			current = true;
+    		},
+    		o: function outro(local) {
+    			transition_out(collapsiblecard.$$.fragment, local);
+    			current = false;
+    		},
+    		d: function destroy(detaching) {
+    			destroy_component(collapsiblecard, detaching);
+    		}
+    	};
+
+    	dispatch_dev("SvelteRegisterBlock", {
+    		block,
+    		id: create_fragment$h.name,
+    		type: "component",
+    		source: "",
+    		ctx
+    	});
+
+    	return block;
+    }
+
+    function instance$h($$self, $$props, $$invalidate) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('ConfigKeys', slots, []);
+    	let { label = 'collapsible list' } = $$props;
+    	let { menu = ['A', 'B', 'C'] } = $$props;
+    	let { choices = [...menu] } = $$props;
+    	const writable_props = ['label', 'menu', 'choices'];
+
+    	Object.keys($$props).forEach(key => {
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<ConfigKeys> was created with unknown prop '${key}'`);
+    	});
+
+    	const $$binding_groups = [[]];
+
+    	function input_change_handler() {
+    		choices = get_binding_group_value($$binding_groups[0], this.__value, this.checked);
+    		$$invalidate(0, choices);
+    	}
+
+    	function open_handler(event) {
+    		bubble.call(this, $$self, event);
+    	}
+
+    	function close_handler(event) {
+    		bubble.call(this, $$self, event);
+    	}
+
+    	$$self.$$set = $$props => {
+    		if ('label' in $$props) $$invalidate(1, label = $$props.label);
+    		if ('menu' in $$props) $$invalidate(2, menu = $$props.menu);
+    		if ('choices' in $$props) $$invalidate(0, choices = $$props.choices);
+    	};
+
+    	$$self.$capture_state = () => ({ CollapsibleCard, label, menu, choices });
+
+    	$$self.$inject_state = $$props => {
+    		if ('label' in $$props) $$invalidate(1, label = $$props.label);
+    		if ('menu' in $$props) $$invalidate(2, menu = $$props.menu);
+    		if ('choices' in $$props) $$invalidate(0, choices = $$props.choices);
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -12865,124 +13297,68 @@ var app = (function () {
     	}
 
     	return [
-    		expanded,
     		choices,
-    		headerText,
+    		label,
     		menu,
-    		click_handler,
     		input_change_handler,
-    		$$binding_groups
+    		$$binding_groups,
+    		open_handler,
+    		close_handler
     	];
     }
 
-    class CollapsibleSection extends SvelteComponentDev {
+    class ConfigKeys extends SvelteComponentDev {
     	constructor(options) {
     		super(options);
-
-    		init(this, options, instance$g, create_fragment$g, safe_not_equal, {
-    			headerText: 2,
-    			expanded: 0,
-    			menu: 3,
-    			choices: 1
-    		});
+    		init(this, options, instance$h, create_fragment$h, safe_not_equal, { label: 1, menu: 2, choices: 0 });
 
     		dispatch_dev("SvelteRegisterComponent", {
     			component: this,
-    			tagName: "CollapsibleSection",
+    			tagName: "ConfigKeys",
     			options,
-    			id: create_fragment$g.name
+    			id: create_fragment$h.name
     		});
-
-    		const { ctx } = this.$$;
-    		const props = options.props || {};
-
-    		if (/*headerText*/ ctx[2] === undefined && !("headerText" in props)) {
-    			console.warn("<CollapsibleSection> was created without expected prop 'headerText'");
-    		}
     	}
 
-    	get headerText() {
-    		throw new Error("<CollapsibleSection>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	get label() {
+    		throw new Error("<ConfigKeys>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
 
-    	set headerText(value) {
-    		throw new Error("<CollapsibleSection>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
-    	}
-
-    	get expanded() {
-    		throw new Error("<CollapsibleSection>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
-    	}
-
-    	set expanded(value) {
-    		throw new Error("<CollapsibleSection>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	set label(value) {
+    		throw new Error("<ConfigKeys>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
 
     	get menu() {
-    		throw new Error("<CollapsibleSection>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    		throw new Error("<ConfigKeys>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
 
     	set menu(value) {
-    		throw new Error("<CollapsibleSection>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    		throw new Error("<ConfigKeys>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
 
     	get choices() {
-    		throw new Error("<CollapsibleSection>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    		throw new Error("<ConfigKeys>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
 
     	set choices(value) {
-    		throw new Error("<CollapsibleSection>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    		throw new Error("<ConfigKeys>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
     }
 
-    /* src/routes/Test2.svelte generated by Svelte v3.20.1 */
+    /* src/routes/Test2.svelte generated by Svelte v3.46.4 */
 
     const { Object: Object_1$1, console: console_1$3 } = globals;
-    const file$g = "src/routes/Test2.svelte";
+    const file$h = "src/routes/Test2.svelte";
 
-    // (9:8) {#if loaded}
-    function create_if_block_1(ctx) {
-    	let current;
-    	const timepicker = new Timepicker({ $$inline: true });
-
-    	const block = {
-    		c: function create() {
-    			create_component(timepicker.$$.fragment);
-    		},
-    		m: function mount(target, anchor) {
-    			mount_component(timepicker, target, anchor);
-    			current = true;
-    		},
-    		i: function intro(local) {
-    			if (current) return;
-    			transition_in(timepicker.$$.fragment, local);
-    			current = true;
-    		},
-    		o: function outro(local) {
-    			transition_out(timepicker.$$.fragment, local);
-    			current = false;
-    		},
-    		d: function destroy(detaching) {
-    			destroy_component(timepicker, detaching);
-    		}
-    	};
-
-    	dispatch_dev("SvelteRegisterBlock", {
-    		block,
-    		id: create_if_block_1.name,
-    		type: "if",
-    		source: "(9:8) {#if loaded}",
-    		ctx
-    	});
-
-    	return block;
-    }
-
-    // (16:8) {:else}
+    // (26:8) {:else}
     function create_else_block$3(ctx) {
+    	let loader;
     	let current;
 
-    	const loader = new Loader({
-    			props: { loading: !/*loaded*/ ctx[2] },
+    	loader = new Loader({
+    			props: {
+    				loading: !/*loaded*/ ctx[2] || /*update*/ ctx[3]
+    			},
     			$$inline: true
     		});
 
@@ -12996,7 +13372,7 @@ var app = (function () {
     		},
     		p: function update(ctx, dirty) {
     			const loader_changes = {};
-    			if (dirty & /*loaded*/ 4) loader_changes.loading = !/*loaded*/ ctx[2];
+    			if (dirty & /*loaded, update*/ 12) loader_changes.loading = !/*loaded*/ ctx[2] || /*update*/ ctx[3];
     			loader.$set(loader_changes);
     		},
     		i: function intro(local) {
@@ -13017,18 +13393,19 @@ var app = (function () {
     		block,
     		id: create_else_block$3.name,
     		type: "else",
-    		source: "(16:8) {:else}",
+    		source: "(26:8) {:else}",
     		ctx
     	});
 
     	return block;
     }
 
-    // (14:8) {#if loaded}
+    // (24:8) {#if loaded && !update}
     function create_if_block$3(ctx) {
+    	let uplot;
     	let current;
 
-    	const uplot = new Uplot_v3({
+    	uplot = new Uplot_v3({
     			props: {
     				data: /*plot_data*/ ctx[1],
     				labels: /*plot_keys*/ ctx[4]
@@ -13068,55 +13445,86 @@ var app = (function () {
     		block,
     		id: create_if_block$3.name,
     		type: "if",
-    		source: "(14:8) {#if loaded}",
+    		source: "(24:8) {#if loaded && !update}",
     		ctx
     	});
 
     	return block;
     }
 
-    function create_fragment$h(ctx) {
+    function create_fragment$i(ctx) {
     	let t0;
     	let div2;
     	let div0;
+    	let temptable;
     	let t1;
+    	let config0;
+    	let updating_choices;
     	let t2;
+    	let config1;
+    	let updating_choices_1;
     	let t3;
+    	let timepicker;
     	let t4;
     	let div1;
     	let current_block_type_index;
-    	let if_block1;
+    	let if_block;
     	let current;
 
-    	const temptable = new Temperature_table({
+    	temptable = new Temperature_table({
     			props: {
     				table_data: /*table_data*/ ctx[0],
-    				title: /*title*/ ctx[3]
+    				title: /*title*/ ctx[6]
     			},
     			$$inline: true
     		});
 
-    	const collapsiblesection0 = new CollapsibleSection({
-    			props: { headerText: "choose_items_for_plotting" },
-    			$$inline: true
-    		});
+    	function config0_choices_binding(value) {
+    		/*config0_choices_binding*/ ctx[14](value);
+    	}
 
-    	const collapsiblesection1 = new CollapsibleSection({
-    			props: { headerText: "choose_items_for_the_table" },
-    			$$inline: true
-    		});
+    	let config0_props = {
+    		label: "choose-plot-items",
+    		menu: /*all_plot_keys*/ ctx[5]
+    	};
 
-    	let if_block0 = /*loaded*/ ctx[2] && create_if_block_1(ctx);
+    	if (/*plot_keys*/ ctx[4] !== void 0) {
+    		config0_props.choices = /*plot_keys*/ ctx[4];
+    	}
+
+    	config0 = new ConfigKeys({ props: config0_props, $$inline: true });
+    	binding_callbacks.push(() => bind(config0, 'choices', config0_choices_binding));
+    	config0.$on("close", /*handleConfigPlotClose*/ ctx[10]);
+    	config0.$on("open", /*handleConfigPlotOpen*/ ctx[9]);
+
+    	function config1_choices_binding(value) {
+    		/*config1_choices_binding*/ ctx[15](value);
+    	}
+
+    	let config1_props = {
+    		label: "choose-table-items",
+    		menu: /*all_table_keys*/ ctx[8]
+    	};
+
+    	if (/*table_keys*/ ctx[7] !== void 0) {
+    		config1_props.choices = /*table_keys*/ ctx[7];
+    	}
+
+    	config1 = new ConfigKeys({ props: config1_props, $$inline: true });
+    	binding_callbacks.push(() => bind(config1, 'choices', config1_choices_binding));
+    	config1.$on("close", /*handleConfigTableClose*/ ctx[11]);
+    	config1.$on("open", handleConfigTableOpen);
+    	timepicker = new Timepicker({ $$inline: true });
     	const if_block_creators = [create_if_block$3, create_else_block$3];
     	const if_blocks = [];
 
     	function select_block_type(ctx, dirty) {
-    		if (/*loaded*/ ctx[2]) return 0;
+    		if (/*loaded*/ ctx[2] && !/*update*/ ctx[3]) return 0;
     		return 1;
     	}
 
     	current_block_type_index = select_block_type(ctx);
-    	if_block1 = if_blocks[current_block_type_index] = if_block_creators[current_block_type_index](ctx);
+    	if_block = if_blocks[current_block_type_index] = if_block_creators[current_block_type_index](ctx);
 
     	const block = {
     		c: function create() {
@@ -13125,21 +13533,21 @@ var app = (function () {
     			div0 = element("div");
     			create_component(temptable.$$.fragment);
     			t1 = space();
-    			create_component(collapsiblesection0.$$.fragment);
+    			create_component(config0.$$.fragment);
     			t2 = space();
-    			create_component(collapsiblesection1.$$.fragment);
+    			create_component(config1.$$.fragment);
     			t3 = space();
-    			if (if_block0) if_block0.c();
+    			create_component(timepicker.$$.fragment);
     			t4 = space();
     			div1 = element("div");
-    			if_block1.c();
+    			if_block.c();
     			document.title = "Test2 nodeWebFridge";
     			attr_dev(div0, "class", "column side svelte-b7zrpx");
-    			add_location(div0, file$g, 4, 4, 88);
+    			add_location(div0, file$h, 4, 4, 88);
     			attr_dev(div1, "class", "column main svelte-b7zrpx");
-    			add_location(div1, file$g, 12, 4, 394);
+    			add_location(div1, file$h, 22, 4, 691);
     			attr_dev(div2, "class", "row svelte-b7zrpx");
-    			add_location(div2, file$g, 3, 0, 66);
+    			add_location(div2, file$h, 3, 0, 66);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -13150,11 +13558,11 @@ var app = (function () {
     			append_dev(div2, div0);
     			mount_component(temptable, div0, null);
     			append_dev(div0, t1);
-    			mount_component(collapsiblesection0, div0, null);
+    			mount_component(config0, div0, null);
     			append_dev(div0, t2);
-    			mount_component(collapsiblesection1, div0, null);
+    			mount_component(config1, div0, null);
     			append_dev(div0, t3);
-    			if (if_block0) if_block0.m(div0, null);
+    			mount_component(timepicker, div0, null);
     			append_dev(div2, t4);
     			append_dev(div2, div1);
     			if_blocks[current_block_type_index].m(div1, null);
@@ -13163,28 +13571,28 @@ var app = (function () {
     		p: function update(ctx, [dirty]) {
     			const temptable_changes = {};
     			if (dirty & /*table_data*/ 1) temptable_changes.table_data = /*table_data*/ ctx[0];
-    			if (dirty & /*title*/ 8) temptable_changes.title = /*title*/ ctx[3];
+    			if (dirty & /*title*/ 64) temptable_changes.title = /*title*/ ctx[6];
     			temptable.$set(temptable_changes);
+    			const config0_changes = {};
+    			if (dirty & /*all_plot_keys*/ 32) config0_changes.menu = /*all_plot_keys*/ ctx[5];
 
-    			if (/*loaded*/ ctx[2]) {
-    				if (!if_block0) {
-    					if_block0 = create_if_block_1(ctx);
-    					if_block0.c();
-    					transition_in(if_block0, 1);
-    					if_block0.m(div0, null);
-    				} else {
-    					transition_in(if_block0, 1);
-    				}
-    			} else if (if_block0) {
-    				group_outros();
-
-    				transition_out(if_block0, 1, 1, () => {
-    					if_block0 = null;
-    				});
-
-    				check_outros();
+    			if (!updating_choices && dirty & /*plot_keys*/ 16) {
+    				updating_choices = true;
+    				config0_changes.choices = /*plot_keys*/ ctx[4];
+    				add_flush_callback(() => updating_choices = false);
     			}
 
+    			config0.$set(config0_changes);
+    			const config1_changes = {};
+    			if (dirty & /*all_table_keys*/ 256) config1_changes.menu = /*all_table_keys*/ ctx[8];
+
+    			if (!updating_choices_1 && dirty & /*table_keys*/ 128) {
+    				updating_choices_1 = true;
+    				config1_changes.choices = /*table_keys*/ ctx[7];
+    				add_flush_callback(() => updating_choices_1 = false);
+    			}
+
+    			config1.$set(config1_changes);
     			let previous_block_index = current_block_type_index;
     			current_block_type_index = select_block_type(ctx);
 
@@ -13198,315 +13606,44 @@ var app = (function () {
     				});
 
     				check_outros();
-    				if_block1 = if_blocks[current_block_type_index];
+    				if_block = if_blocks[current_block_type_index];
 
-    				if (!if_block1) {
-    					if_block1 = if_blocks[current_block_type_index] = if_block_creators[current_block_type_index](ctx);
-    					if_block1.c();
+    				if (!if_block) {
+    					if_block = if_blocks[current_block_type_index] = if_block_creators[current_block_type_index](ctx);
+    					if_block.c();
+    				} else {
+    					if_block.p(ctx, dirty);
     				}
 
-    				transition_in(if_block1, 1);
-    				if_block1.m(div1, null);
+    				transition_in(if_block, 1);
+    				if_block.m(div1, null);
     			}
     		},
     		i: function intro(local) {
     			if (current) return;
     			transition_in(temptable.$$.fragment, local);
-    			transition_in(collapsiblesection0.$$.fragment, local);
-    			transition_in(collapsiblesection1.$$.fragment, local);
-    			transition_in(if_block0);
-    			transition_in(if_block1);
+    			transition_in(config0.$$.fragment, local);
+    			transition_in(config1.$$.fragment, local);
+    			transition_in(timepicker.$$.fragment, local);
+    			transition_in(if_block);
     			current = true;
     		},
     		o: function outro(local) {
     			transition_out(temptable.$$.fragment, local);
-    			transition_out(collapsiblesection0.$$.fragment, local);
-    			transition_out(collapsiblesection1.$$.fragment, local);
-    			transition_out(if_block0);
-    			transition_out(if_block1);
+    			transition_out(config0.$$.fragment, local);
+    			transition_out(config1.$$.fragment, local);
+    			transition_out(timepicker.$$.fragment, local);
+    			transition_out(if_block);
     			current = false;
     		},
     		d: function destroy(detaching) {
     			if (detaching) detach_dev(t0);
     			if (detaching) detach_dev(div2);
     			destroy_component(temptable);
-    			destroy_component(collapsiblesection0);
-    			destroy_component(collapsiblesection1);
-    			if (if_block0) if_block0.d();
+    			destroy_component(config0);
+    			destroy_component(config1);
+    			destroy_component(timepicker);
     			if_blocks[current_block_type_index].d();
-    		}
-    	};
-
-    	dispatch_dev("SvelteRegisterBlock", {
-    		block,
-    		id: create_fragment$h.name,
-    		type: "component",
-    		source: "",
-    		ctx
-    	});
-
-    	return block;
-    }
-
-    async function getRedis(list_name) {
-    	// Fetch all the sensor data from the server
-    	console.log(`get list ${list_name} from redis`);
-
-    	// let response = await fetch(`http://localhost:4000/get/${list_name}`)
-    	let response = await fetch(`http://132.163.53.82:4000/get/${list_name}`);
-
-    	let data = await response.json();
-    	console.log("got ", data);
-    	return data;
-    }
-
-    function instance$h($$self, $$props, $$invalidate) {
-    	let $redisSub;
-    	validate_store(redisSub, "redisSub");
-    	component_subscribe($$self, redisSub, $$value => $$invalidate(8, $redisSub = $$value));
-    	console.log(table_data_default);
-    	let table_data = table_data_default;
-    	table_data = { "stage1": "", "stage2": "" };
-    	let plot_data = null;
-    	let loaded = false;
-    	let title = new Date().toLocaleString();
-    	let plot_keys; //  = ['stage1', 'stage2'];
-    	let table_keys;
-    	let all_plot_keys;
-    	let all_table_keys;
-
-    	async function fetchRedis() {
-    		// Fetch all the sensor data from the server
-    		console.log("fetchRedis");
-
-    		$$invalidate(1, plot_data = null);
-
-    		// console.log('plot_keys', plot_keys);
-    		for (let key of plot_keys) {
-    			console.log("process redis data", key);
-
-    			// let response = await fetch(`http://localhost:4000/${key}/fetch`)
-    			let response = await fetch(`http://132.163.53.82:4000/${key}/fetch`);
-
-    			let data = await response.json();
-
-    			// console.log('data', key,  data.data);
-    			let times = data.data.map(outer => Number(outer[0]) / 1000); //  convert from ms to s
-
-    			let readings = data.data.map(outer => Number(outer[1]));
-
-    			if (plot_data) {
-    				// plot_data defined... need to merge in new data
-    				// console.log('merge into plot_data');
-    				plot_data.push(readings);
-    			} else {
-    				$$invalidate(1, plot_data = [times, readings]);
-    			} // console.log('create plot_data');
-    			// console.log('times', times, readings);
-    		}
-
-    		$$invalidate(2, loaded = true);
-    	}
-
-    	onMount(async () => {
-    		all_plot_keys = await getRedis("plot_keys");
-    		$$invalidate(4, plot_keys = [...all_plot_keys]);
-    		console.log("onMount plot_keys", plot_keys);
-    		all_table_keys = await getRedis("table_keys");
-    		table_keys = [...all_table_keys];
-    		console.log("onMount plot_keys", table_keys);
-    		$$invalidate(0, table_data = {});
-    		table_keys.forEach(elt => $$invalidate(0, table_data[elt] = "", table_data));
-
-    		// console.log('got p_k', p_k);
-    		await fetchRedis();
-
-    		console.log("Finished onMounted");
-    	});
-
-    	const writable_props = [];
-
-    	Object_1$1.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console_1$3.warn(`<Test2> was created with unknown prop '${key}'`);
-    	});
-
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("Test2", $$slots, []);
-
-    	$$self.$capture_state = () => ({
-    		redisSub,
-    		onMount,
-    		Timepicker,
-    		TempTable: Temperature_table,
-    		table_data_default,
-    		controls_default,
-    		states_default,
-    		Uplot: Uplot_v3,
-    		Loader,
-    		CollapsibleSection,
-    		table_data,
-    		plot_data,
-    		loaded,
-    		title,
-    		plot_keys,
-    		table_keys,
-    		all_plot_keys,
-    		all_table_keys,
-    		getRedis,
-    		fetchRedis,
-    		$redisSub
-    	});
-
-    	$$self.$inject_state = $$props => {
-    		if ("table_data" in $$props) $$invalidate(0, table_data = $$props.table_data);
-    		if ("plot_data" in $$props) $$invalidate(1, plot_data = $$props.plot_data);
-    		if ("loaded" in $$props) $$invalidate(2, loaded = $$props.loaded);
-    		if ("title" in $$props) $$invalidate(3, title = $$props.title);
-    		if ("plot_keys" in $$props) $$invalidate(4, plot_keys = $$props.plot_keys);
-    		if ("table_keys" in $$props) table_keys = $$props.table_keys;
-    		if ("all_plot_keys" in $$props) all_plot_keys = $$props.all_plot_keys;
-    		if ("all_table_keys" in $$props) all_table_keys = $$props.all_table_keys;
-    	};
-
-    	if ($$props && "$$inject" in $$props) {
-    		$$self.$inject_state($$props.$$inject);
-    	}
-
-    	$$self.$$.update = () => {
-    		if ($$self.$$.dirty & /*$redisSub, table_data, loaded, plot_data, plot_keys*/ 279) {
-    			 {
-    				let msg = $redisSub.message;
-    				let ready_to_update = false;
-
-    				// console.log('got this redisSub message: ', msg);
-    				if (msg) {
-    					// Check if it is a valid dictionary
-    					try {
-    						// Try to convert message to dictonary
-    						msg = JSON.parse(msg);
-
-    						ready_to_update = true;
-    					} catch(e) {
-    						console.log("parse redis failed msg:", msg);
-    					}
-    				}
-
-    				if (ready_to_update) {
-    					// Update table
-    					Object.keys(table_data).forEach(elt => {
-    						$$invalidate(0, table_data[elt] = msg[elt], table_data);
-    					});
-
-    					// Update time
-    					$$invalidate(3, title = new Date(msg.time).toLocaleString());
-
-    					// Update plot
-    					if (loaded) {
-    						console.log("got time:", msg.time);
-    						plot_data[0].push(msg.time / 1000); // push time into plot_data, convet to seconds
-
-    						plot_keys.forEach((key, idx) => {
-    							// push sensor readings
-    							plot_data[idx + 1].push(msg[key]);
-    						});
-
-    						$$invalidate(1, plot_data = plot_data); // Uplot does not update without this...
-    					}
-    				}
-    			}
-    		}
-
-    		if ($$self.$$.dirty & /*loaded, plot_data*/ 6) {
-    			 console.log("loaded", loaded, "plot_data", plot_data);
-    		}
-    	};
-
-    	return [table_data, plot_data, loaded, title, plot_keys];
-    }
-
-    class Test2 extends SvelteComponentDev {
-    	constructor(options) {
-    		super(options);
-    		init(this, options, instance$h, create_fragment$h, safe_not_equal, {});
-
-    		dispatch_dev("SvelteRegisterComponent", {
-    			component: this,
-    			tagName: "Test2",
-    			options,
-    			id: create_fragment$h.name
-    		});
-    	}
-    }
-
-    /* src/routes/Collapse.svelte generated by Svelte v3.20.1 */
-
-    const { console: console_1$4 } = globals;
-    const file$h = "src/routes/Collapse.svelte";
-
-    function create_fragment$i(ctx) {
-    	let h1;
-    	let t3;
-    	let updating_choices;
-    	let current;
-
-    	function collapsiblesection_choices_binding(value) {
-    		/*collapsiblesection_choices_binding*/ ctx[4].call(null, value);
-    	}
-
-    	let collapsiblesection_props = { headerText: "select items for plotting" };
-
-    	if (/*show_keys*/ ctx[0] !== void 0) {
-    		collapsiblesection_props.choices = /*show_keys*/ ctx[0];
-    	}
-
-    	const collapsiblesection = new CollapsibleSection({
-    			props: collapsiblesection_props,
-    			$$inline: true
-    		});
-
-    	binding_callbacks.push(() => bind(collapsiblesection, "choices", collapsiblesection_choices_binding));
-
-    	const block = {
-    		c: function create() {
-    			h1 = element("h1");
-    			h1.textContent = `Hello ${/*name*/ ctx[1]}!`;
-    			t3 = space();
-    			create_component(collapsiblesection.$$.fragment);
-    			add_location(h1, file$h, 10, 0, 234);
-    		},
-    		l: function claim(nodes) {
-    			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
-    		},
-    		m: function mount(target, anchor) {
-    			insert_dev(target, h1, anchor);
-    			insert_dev(target, t3, anchor);
-    			mount_component(collapsiblesection, target, anchor);
-    			current = true;
-    		},
-    		p: function update(ctx, [dirty]) {
-    			const collapsiblesection_changes = {};
-
-    			if (!updating_choices && dirty & /*show_keys*/ 1) {
-    				updating_choices = true;
-    				collapsiblesection_changes.choices = /*show_keys*/ ctx[0];
-    				add_flush_callback(() => updating_choices = false);
-    			}
-
-    			collapsiblesection.$set(collapsiblesection_changes);
-    		},
-    		i: function intro(local) {
-    			if (current) return;
-    			transition_in(collapsiblesection.$$.fragment, local);
-    			current = true;
-    		},
-    		o: function outro(local) {
-    			transition_out(collapsiblesection.$$.fragment, local);
-    			current = false;
-    		},
-    		d: function destroy(detaching) {
-    			if (detaching) detach_dev(h1);
-    			if (detaching) detach_dev(t3);
-    			destroy_component(collapsiblesection, detaching);
     		}
     	};
 
@@ -13521,38 +13658,184 @@ var app = (function () {
     	return block;
     }
 
-    function instance$i($$self, $$props, $$invalidate) {
-    	let name = "world";
-    	let plot_keys = ["A", "B", "Ca"];
-    	let show_keys = [...plot_keys];
-    	let expanded = false;
-    	const writable_props = [];
+    function handleConfigTableOpen(e) {
+    	console.log('handleConfigTableOpen', e);
+    }
 
-    	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console_1$4.warn(`<Collapse> was created with unknown prop '${key}'`);
+    function instance$i($$self, $$props, $$invalidate) {
+    	let $redisSub;
+    	validate_store(redisSub, 'redisSub');
+    	component_subscribe($$self, redisSub, $$value => $$invalidate(13, $redisSub = $$value));
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Test2', slots, []);
+    	console.log(table_data_default);
+    	let table_data = table_data_default;
+    	table_data = { 'stage1': '', 'stage2': '' };
+    	let all_plot_data = null;
+    	let plot_data = null;
+    	let loaded = false;
+    	let update = false;
+    	let title = new Date().toLocaleString();
+    	let plot_keys; //  = ['stage1', 'stage2'];
+    	let table_keys;
+    	let all_plot_keys;
+    	let all_table_keys;
+    	let hostname = 'localhost';
+
+    	function handleConfigPlotOpen(e) {
+    		console.log('handleConfigPlotOpen', e);
+    		$$invalidate(3, update = true);
+    	}
+
+    	function handleConfigPlotClose(e) {
+    		console.log('handleConfigPlotClose', e);
+    		build_plot_data();
+    		$$invalidate(3, update = false);
+    	}
+
+    	function handleConfigTableClose(e) {
+    		console.log('handleConfigTableClose', e);
+    		$$invalidate(0, table_data = {});
+    		table_keys.forEach(elt => $$invalidate(0, table_data[elt] = '-1', table_data));
+    	}
+
+    	async function getRedis(list_name) {
+    		// Fetch all the sensor data from the server
+    		console.log(`get list ${list_name} from redis`);
+
+    		// let response = await fetch(`http://localhost:4000/get/${list_name}`)
+    		let response = await fetch(`http://${hostname}:4000/get/${list_name}`);
+
+    		let data = await response.json();
+    		console.log('got ', data);
+    		return data;
+    	}
+
+    	function build_plot_data() {
+    		$$invalidate(1, plot_data = [all_plot_data[0]]);
+
+    		plot_keys.forEach(key => {
+    			let idx = all_plot_keys.indexOf(key);
+
+    			// console.log( 'index of', idx);
+    			plot_data.push(all_plot_data[idx + 1]);
+    		});
+    	}
+
+    	async function fetchRedis() {
+    		// Fetch all the sensor data from the server
+    		console.log('fetchRedis');
+
+    		$$invalidate(12, all_plot_data = null);
+
+    		for (let key of all_plot_keys) {
+    			console.log('process redis data', key);
+
+    			// let response = await fetch(`http://localhost:4000/${key}/fetch`)
+    			let response = await fetch(`http://${hostname}:4000/${key}/fetch`);
+
+    			let data = await response.json();
+    			let times = data.data.map(outer => Number(outer[0]) / 1000); //  convert from ms to s
+    			let readings = data.data.map(outer => Number(outer[1]));
+
+    			/*
+    let times=[];
+    let readings=[];
+    */
+    			if (all_plot_data) {
+    				// plot_data defined... need to merge in new data
+    				// console.log('merge into plot_data');
+    				all_plot_data.push(readings);
+    			} else {
+    				$$invalidate(12, all_plot_data = [times, readings]);
+    			} // console.log('create plot_data');
+    			// console.log('times', times, readings);
+    		}
+
+    		build_plot_data();
+    		$$invalidate(2, loaded = true);
+    	}
+
+    	onMount(async () => {
+    		hostname = new URL(window.location.href).hostname;
+    		console.log('hostname', hostname);
+    		$$invalidate(5, all_plot_keys = await getRedis('plot_keys'));
+    		$$invalidate(4, plot_keys = [...all_plot_keys]);
+    		$$invalidate(4, plot_keys = ['CoolantIn', 'CoollantOut']);
+    		console.log('onMount all_plot_keys', all_plot_keys, plot_keys);
+    		$$invalidate(8, all_table_keys = await getRedis('table_keys'));
+    		$$invalidate(7, table_keys = [...all_table_keys]);
+    		console.log('onMount table_keys', table_keys);
+    		$$invalidate(0, table_data = {});
+    		$$invalidate(7, table_keys = ['CoolantIn', 'CoollantOut']);
+    		table_keys.forEach(elt => $$invalidate(0, table_data[elt] = '-1', table_data));
+
+    		// console.log('got p_k', p_k);
+    		await fetchRedis();
+
+    		console.log('Finished onMounted');
     	});
 
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("Collapse", $$slots, []);
+    	const writable_props = [];
 
-    	function collapsiblesection_choices_binding(value) {
-    		show_keys = value;
-    		$$invalidate(0, show_keys);
+    	Object_1$1.keys($$props).forEach(key => {
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console_1$3.warn(`<Test2> was created with unknown prop '${key}'`);
+    	});
+
+    	function config0_choices_binding(value) {
+    		plot_keys = value;
+    		$$invalidate(4, plot_keys);
+    	}
+
+    	function config1_choices_binding(value) {
+    		table_keys = value;
+    		$$invalidate(7, table_keys);
     	}
 
     	$$self.$capture_state = () => ({
-    		CollapsibleSection,
-    		name,
+    		redisSub,
+    		onMount,
+    		Timepicker,
+    		TempTable: Temperature_table,
+    		table_data_default,
+    		controls_default,
+    		states_default,
+    		Uplot: Uplot_v3,
+    		Loader,
+    		Config: ConfigKeys,
+    		table_data,
+    		all_plot_data,
+    		plot_data,
+    		loaded,
+    		update,
+    		title,
     		plot_keys,
-    		show_keys,
-    		expanded
+    		table_keys,
+    		all_plot_keys,
+    		all_table_keys,
+    		hostname,
+    		handleConfigPlotOpen,
+    		handleConfigPlotClose,
+    		handleConfigTableOpen,
+    		handleConfigTableClose,
+    		getRedis,
+    		build_plot_data,
+    		fetchRedis,
+    		$redisSub
     	});
 
     	$$self.$inject_state = $$props => {
-    		if ("name" in $$props) $$invalidate(1, name = $$props.name);
-    		if ("plot_keys" in $$props) plot_keys = $$props.plot_keys;
-    		if ("show_keys" in $$props) $$invalidate(0, show_keys = $$props.show_keys);
-    		if ("expanded" in $$props) expanded = $$props.expanded;
+    		if ('table_data' in $$props) $$invalidate(0, table_data = $$props.table_data);
+    		if ('all_plot_data' in $$props) $$invalidate(12, all_plot_data = $$props.all_plot_data);
+    		if ('plot_data' in $$props) $$invalidate(1, plot_data = $$props.plot_data);
+    		if ('loaded' in $$props) $$invalidate(2, loaded = $$props.loaded);
+    		if ('update' in $$props) $$invalidate(3, update = $$props.update);
+    		if ('title' in $$props) $$invalidate(6, title = $$props.title);
+    		if ('plot_keys' in $$props) $$invalidate(4, plot_keys = $$props.plot_keys);
+    		if ('table_keys' in $$props) $$invalidate(7, table_keys = $$props.table_keys);
+    		if ('all_plot_keys' in $$props) $$invalidate(5, all_plot_keys = $$props.all_plot_keys);
+    		if ('all_table_keys' in $$props) $$invalidate(8, all_table_keys = $$props.all_table_keys);
+    		if ('hostname' in $$props) hostname = $$props.hostname;
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -13560,34 +13843,189 @@ var app = (function () {
     	}
 
     	$$self.$$.update = () => {
-    		if ($$self.$$.dirty & /*show_keys*/ 1) {
-    			 console.log(show_keys);
+    		if ($$self.$$.dirty & /*plot_keys*/ 16) {
+    			 console.log('plot_keys', plot_keys);
+    		}
+
+    		if ($$self.$$.dirty & /*$redisSub, table_data, loaded, all_plot_data, all_plot_keys, plot_data*/ 12327) {
+    			 {
+    				let msg = $redisSub.message;
+    				let ready_to_update = false;
+
+    				// console.log('got this redisSub message: ', msg);
+    				if (msg) {
+    					// Check if it is a valid dictionary
+    					try {
+    						// Try to convert message to dictonary
+    						msg = JSON.parse(msg);
+
+    						ready_to_update = true;
+    					} catch(e) {
+    						console.log('parse redis failed msg:', msg);
+    					}
+    				}
+
+    				if (ready_to_update) {
+    					// Update table
+    					Object.keys(table_data).forEach(elt => {
+    						$$invalidate(0, table_data[elt] = msg[elt], table_data);
+    					});
+
+    					// Update time
+    					$$invalidate(6, title = new Date(msg.time).toLocaleString());
+
+    					// Update plot
+    					if (loaded) {
+    						console.log('got time:', msg.time);
+    						all_plot_data[0].push(msg.time / 1000); // push time into plot_data, convet to seconds
+
+    						all_plot_keys.forEach((key, idx) => {
+    							// push sensor readings
+    							all_plot_data[idx + 1].push(msg[key]);
+    						});
+
+    						build_plot_data();
+    						((((($$invalidate(1, plot_data), $$invalidate(13, $redisSub)), $$invalidate(0, table_data)), $$invalidate(2, loaded)), $$invalidate(12, all_plot_data)), $$invalidate(5, all_plot_keys)); // this causes the plot to be updated
+    					} // plot_keys = plot_keys;
+    				}
+    			}
+    		}
+
+    		if ($$self.$$.dirty & /*loaded, plot_data*/ 6) {
+    			 console.log('loaded', loaded, 'plot_data', plot_data);
+    		}
+
+    		if ($$self.$$.dirty & /*update*/ 8) {
+    			 {
+    				console.log('update', update);
+    			}
     		}
     	};
 
-    	return [show_keys, name, plot_keys, expanded, collapsiblesection_choices_binding];
+    	return [
+    		table_data,
+    		plot_data,
+    		loaded,
+    		update,
+    		plot_keys,
+    		all_plot_keys,
+    		title,
+    		table_keys,
+    		all_table_keys,
+    		handleConfigPlotOpen,
+    		handleConfigPlotClose,
+    		handleConfigTableClose,
+    		all_plot_data,
+    		$redisSub,
+    		config0_choices_binding,
+    		config1_choices_binding
+    	];
     }
 
-    class Collapse extends SvelteComponentDev {
+    class Test2 extends SvelteComponentDev {
     	constructor(options) {
     		super(options);
     		init(this, options, instance$i, create_fragment$i, safe_not_equal, {});
 
     		dispatch_dev("SvelteRegisterComponent", {
     			component: this,
-    			tagName: "Collapse",
+    			tagName: "Test2",
     			options,
     			id: create_fragment$i.name
     		});
     	}
     }
 
-    /* src/App.svelte generated by Svelte v3.20.1 */
+    /* src/routes/Collapse.svelte generated by Svelte v3.46.4 */
+
+    const { console: console_1$4 } = globals;
+    const file$i = "src/routes/Collapse.svelte";
 
     function create_fragment$j(ctx) {
+    	let h1;
+
+    	const block = {
+    		c: function create() {
+    			h1 = element("h1");
+    			h1.textContent = `Hello ${/*name*/ ctx[0]}!`;
+    			add_location(h1, file$i, 10, 0, 218);
+    		},
+    		l: function claim(nodes) {
+    			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
+    		},
+    		m: function mount(target, anchor) {
+    			insert_dev(target, h1, anchor);
+    		},
+    		p: noop,
+    		i: noop,
+    		o: noop,
+    		d: function destroy(detaching) {
+    			if (detaching) detach_dev(h1);
+    		}
+    	};
+
+    	dispatch_dev("SvelteRegisterBlock", {
+    		block,
+    		id: create_fragment$j.name,
+    		type: "component",
+    		source: "",
+    		ctx
+    	});
+
+    	return block;
+    }
+
+    function instance$j($$self, $$props, $$invalidate) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('Collapse', slots, []);
+    	let name = 'world';
+    	let plot_keys = ['A', 'B', 'Ca'];
+    	let show_keys = [...plot_keys];
+    	let expanded = false;
+    	const writable_props = [];
+
+    	Object.keys($$props).forEach(key => {
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console_1$4.warn(`<Collapse> was created with unknown prop '${key}'`);
+    	});
+
+    	$$self.$capture_state = () => ({ name, plot_keys, show_keys, expanded });
+
+    	$$self.$inject_state = $$props => {
+    		if ('name' in $$props) $$invalidate(0, name = $$props.name);
+    		if ('plot_keys' in $$props) plot_keys = $$props.plot_keys;
+    		if ('show_keys' in $$props) $$invalidate(2, show_keys = $$props.show_keys);
+    		if ('expanded' in $$props) expanded = $$props.expanded;
+    	};
+
+    	if ($$props && "$$inject" in $$props) {
+    		$$self.$inject_state($$props.$$inject);
+    	}
+
+    	 console.log(show_keys);
+    	return [name];
+    }
+
+    class Collapse extends SvelteComponentDev {
+    	constructor(options) {
+    		super(options);
+    		init(this, options, instance$j, create_fragment$j, safe_not_equal, {});
+
+    		dispatch_dev("SvelteRegisterComponent", {
+    			component: this,
+    			tagName: "Collapse",
+    			options,
+    			id: create_fragment$j.name
+    		});
+    	}
+    }
+
+    /* src/App.svelte generated by Svelte v3.46.4 */
+
+    function create_fragment$k(ctx) {
+    	let router;
     	let current;
 
-    	const router = new Router({
+    	router = new Router({
     			props: { routes: /*routes*/ ctx[0] },
     			$$inline: true
     		});
@@ -13620,7 +14058,7 @@ var app = (function () {
 
     	dispatch_dev("SvelteRegisterBlock", {
     		block,
-    		id: create_fragment$j.name,
+    		id: create_fragment$k.name,
     		type: "component",
     		source: "",
     		ctx
@@ -13629,7 +14067,10 @@ var app = (function () {
     	return block;
     }
 
-    function instance$j($$self, $$props, $$invalidate) {
+    function instance$k($$self, $$props, $$invalidate) {
+    	let { $$slots: slots = {}, $$scope } = $$props;
+    	validate_slots('App', slots, []);
+
     	const routes = {
     		"/home": Home,
     		"/channel/:id": Channel,
@@ -13642,11 +14083,8 @@ var app = (function () {
     	const writable_props = [];
 
     	Object.keys($$props).forEach(key => {
-    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== "$$") console.warn(`<App> was created with unknown prop '${key}'`);
+    		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console.warn(`<App> was created with unknown prop '${key}'`);
     	});
-
-    	let { $$slots = {}, $$scope } = $$props;
-    	validate_slots("App", $$slots, []);
 
     	$$self.$capture_state = () => ({
     		Router,
@@ -13664,13 +14102,13 @@ var app = (function () {
     class App extends SvelteComponentDev {
     	constructor(options) {
     		super(options);
-    		init(this, options, instance$j, create_fragment$j, safe_not_equal, {});
+    		init(this, options, instance$k, create_fragment$k, safe_not_equal, {});
 
     		dispatch_dev("SvelteRegisterComponent", {
     			component: this,
     			tagName: "App",
     			options,
-    			id: create_fragment$j.name
+    			id: create_fragment$k.name
     		});
     	}
     }

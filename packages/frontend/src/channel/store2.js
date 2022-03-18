@@ -4,10 +4,11 @@ import { writable } from "svelte/store";
 function createStore2() {
   const { subscribe, set, update } = writable([]);
   const channelId = 'test2';
+  const hostname = (new URL(window.location.href)).hostname;
+  console.log('store2 hostname:', hostname);
   const eventSource = new EventSource(
-    `http://132.163.53.82:4000/${channelId}/listen`
+    `http://${hostname}:4000/${channelId}/listen`
   );
-
   eventSource.onmessage = (e) => {
     console.log('createStore2 event.data', e.data);
     let msg = JSON.parse(e.data);

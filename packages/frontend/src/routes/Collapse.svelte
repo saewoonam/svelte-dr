@@ -1,5 +1,5 @@
 <script>
-	import CollapsibleSection from '../components/CollapsibleSection.svelte'
+	// import Config from '../components/ConfigItems.svelte'
     
 	let name = 'world';
 	let plot_keys = ['A', 'B', 'Ca']
@@ -9,8 +9,9 @@
 </script>
 
 <h1>Hello {name}!</h1>
-<CollapsibleSection headerText={'select items for plotting'} bind:choices={show_keys}/>
 <!--
+<Config label={"my keys"} bind:choices={show_keys} menu={plot_keys} />
+
     <CollapsibleSection headerText={'select items for plotting'} bind:expanded={expanded} bind:choices={show_keys} menu={plot_keys} >
 </CollapsibleSection>
 

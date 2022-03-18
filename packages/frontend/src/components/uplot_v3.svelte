@@ -110,8 +110,10 @@
         console.log(html2canvas)
          */
     });
-    //$: {console.log('data changed into uPlot, data.length', data.length);}
-    //  $: {console.log('labels changed into uPlot, label.length', labels.length);}
+    /*
+    $: {console.log('data changed into uPlot, data.length', data.length);}
+    $: {console.log('labels changed into uPlot, label.length', labels.length);}
+    */
     afterUpdate( ()=> {
         // console.log('afterUpdate data[0].length', data[0].length)
         if (mounted) {
