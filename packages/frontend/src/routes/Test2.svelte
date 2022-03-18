@@ -18,6 +18,7 @@
               on:close={handleConfigTableClose}
               on:open={handleConfigTableOpen}
         />
+        <Heater />
         <Timepicker />
     </div>
     <div class="column main">
@@ -40,7 +41,7 @@
     import Uplot from '../components/uplot_v3.svelte';
     import Loader from '../components/Loader.svelte';
 	import Config from '../components/MyCollapse.svelte'
-    
+    import Heater from '../components/checkbox_list_component.svelte';
     console.log(table_data_default);
     let table_data = table_data_default;
     table_data = {'stage1':'', 'stage2':''};

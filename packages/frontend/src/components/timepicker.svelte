@@ -15,5 +15,5 @@ const flatpickrOptions = {
 <div>
     Next Auto Recycle Time
     <Flatpickr bind:value={date} options={flatpickrOptions} {disabled}
-      style='width:85%; font-size: 15px;' />
+      style='width:150px; font-size: 15px;' />
 </div>
