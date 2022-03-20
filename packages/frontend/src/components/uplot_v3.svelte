@@ -97,7 +97,10 @@
         })
     }
     opts.series = s;
-    // console.log('opts.series', opts.series)
+    console.log('opts.series', opts.series)
+    opts.series[0] =  {
+      value: "{YYYY}-{MM}-{DD} {HH}:{mm}:{ss}"
+    }
     // console.log('labels', labels);
     labels.forEach((item, index) => {
         opts.series[index+1].label = item; // offset index by 1, index 0: time

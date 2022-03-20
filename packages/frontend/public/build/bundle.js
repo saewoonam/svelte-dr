@@ -11953,7 +11953,7 @@ var app = (function () {
     const { console: console_1$2 } = globals;
     const file$d = "src/components/uplot_v3.svelte";
 
-    // (397:12) {:else}
+    // (400:12) {:else}
     function create_else_block$2(ctx) {
     	let logicon;
     	let current;
@@ -11985,14 +11985,14 @@ var app = (function () {
     		block,
     		id: create_else_block$2.name,
     		type: "else",
-    		source: "(397:12) {:else}",
+    		source: "(400:12) {:else}",
     		ctx
     	});
 
     	return block;
     }
 
-    // (395:12) {#if logy==3}
+    // (398:12) {#if logy==3}
     function create_if_block$2(ctx) {
     	let linicon;
     	let current;
@@ -12024,7 +12024,7 @@ var app = (function () {
     		block,
     		id: create_if_block$2.name,
     		type: "if",
-    		source: "(395:12) {#if logy==3}",
+    		source: "(398:12) {#if logy==3}",
     		ctx
     	});
 
@@ -12086,17 +12086,17 @@ var app = (function () {
     			div1 = element("div");
     			attr_dev(link, "rel", "stylesheet");
     			attr_dev(link, "href", "https://leeoniya.github.io/uPlot/dist/uPlot.min.css");
-    			add_location(link, file$d, 388, 4, 12849);
+    			add_location(link, file$d, 391, 4, 12923);
     			attr_dev(button0, "class", "svelte-ntrb8o");
-    			add_location(button0, file$d, 390, 8, 12950);
+    			add_location(button0, file$d, 393, 8, 13024);
     			attr_dev(button1, "class", "svelte-ntrb8o");
-    			add_location(button1, file$d, 393, 8, 13039);
+    			add_location(button1, file$d, 396, 8, 13113);
     			attr_dev(button2, "class", "svelte-ntrb8o");
-    			add_location(button2, file$d, 400, 8, 13217);
+    			add_location(button2, file$d, 403, 8, 13291);
     			attr_dev(button3, "class", "svelte-ntrb8o");
-    			add_location(button3, file$d, 403, 8, 13306);
-    			add_location(div0, file$d, 389, 4, 12936);
-    			add_location(div1, file$d, 407, 4, 13409);
+    			add_location(button3, file$d, 406, 8, 13380);
+    			add_location(div0, file$d, 392, 4, 13010);
+    			add_location(div1, file$d, 410, 4, 13483);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -12306,8 +12306,9 @@ var app = (function () {
     	}
 
     	opts.series = s;
+    	console.log('opts.series', opts.series);
+    	opts.series[0] = { value: "{YYYY}-{MM}-{DD} {HH}:{mm}:{ss}" };
 
-    	// console.log('opts.series', opts.series)
     	// console.log('labels', labels);
     	labels.forEach((item, index) => {
     		$$invalidate(6, opts.series[index + 1].label = item, opts); // offset index by 1, index 0: time
