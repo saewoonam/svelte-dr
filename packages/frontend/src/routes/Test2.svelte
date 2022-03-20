@@ -1,37 +1,3 @@
-<svelte:head>
-  <title>Test2 nodeWebFridge</title>
-</svelte:head>
-<div class="row">
-    <div class="column side">
-        <TempTable table_data={table_data} title={title} />
-        <Config
-              label={`click to choose plot items`} 
-              menu={all_plot_keys}
-              bind:choices={plot_keys} 
-              on:close={handleConfigPlotClose}
-              on:open={handleConfigPlotOpen}
-        />
-        <Config
-              label={`choose table items`} 
-              menu={all_table_keys}
-              bind:choices={table_keys} 
-              on:close={handleConfigTableClose}
-              on:open={handleConfigTableOpen}
-        />
-        <Heater />
-        <Timepicker />
-    </div>
-    <div class="column main">
-        {#if loaded && !update}
-            <Uplot data={plot_data} labels={plot_keys} />
-        {:else}
-            <Loader loading={!loaded || update} />
-        {/if}
-    </div>
-
-</div>
-
-
 <script>
     import { redisSub } from "../channel/store2";
     import { onMount } from "svelte";
@@ -55,6 +21,8 @@
     let all_plot_keys;
     let all_table_keys;
     let hostname = 'localhost'
+    let uplot_size = {width:600, height:400};
+
 
     function handleConfigPlotOpen(e) {
             console.log('handleConfigPlotOpen', e);
@@ -119,8 +87,35 @@
         build_plot_data();
         loaded = true;
     }
+    function getSize() {
+        return {
+                width: window.innerWidth-300, // left column
+                height: window.innerHeight-100, // top row of icons
+            }
+    }
+    // window resize debouncer from:
+    // https://svelte.dev/repl/33d2066858a44c6e800f2377105d8c38?version=3.46.4
+	const debounce = (func, delay) => {
+		let timer;
 
+		return function () {
+			const context = this;
+			const args = arguments;
+			clearTimeout(timer);
+			timer = setTimeout(() => func.apply(context, args), delay);
+		};
+	};
+	
+	const setWindowWidth = () => {
+		let windowWidth = `${window.innerWidth}px`;
+        uplot_size = getSize();
+        console.log(windowWidth, getSize());
+	};
+	
+	const debouncedSetWindowWidth = debounce(setWindowWidth, 300);
+	
     onMount(async() => {
+            uplot_size = getSize();
             hostname = new URL(window.location.href).hostname
             console.log('hostname', hostname);
             all_plot_keys = await getRedis('plot_keys');
@@ -135,7 +130,11 @@
             table_keys.forEach(elt=>table_data[elt]='-1')
             // console.log('got p_k', p_k);
             await fetchRedis();
+            window.addEventListener('resize', debouncedSetWindowWidth);
             console.log('Finished onMounted');
+            return () => {
+                    window.removeEventListener('resize', debouncedSetWindowWidth);
+            }
     });
     $: console.log('plot_keys', plot_keys);
     $: console.log('loaded', loaded, 'plot_data', plot_data);
@@ -165,8 +164,8 @@
             title = new Date(msg.time).toLocaleString();
             // Update plot
             if (loaded) {
-                console.log('got time:', msg.time);
-                all_plot_data[0].push(msg.time/1000); // push time into plot_data, convet to seconds
+                // console.log('got time:', msg.time);
+                all_plot_data[0].push(msg.time/1000); // push time into plot_data, convert to seconds
                 all_plot_keys.forEach((key, idx)=> { // push sensor readings
                     all_plot_data[idx+1].push(msg[key])
                 });
@@ -178,41 +177,40 @@
     }
 </script>
 <style>
-* {
-  box-sizing: border-box;
-}
-.column {
-  float: left;
-  padding: 10px;
-}
-
-/* Left and right column */
-.column.side {
-  width: 25%;
-}
-
-/* Middle column */
-.column.main {
-  width: 70%;
-}
-
-/* Clear floats after the columns */
-.row:after {
-  content: "";
-  display: table;
-  clear: both;
-}
-
-/* Responsive layout - makes the three columns stack on top of each other instead of next to each other */
-@media screen and (max-width: 600px) {
-  .column.side, .column.main {
-    width: 100%;
-  }
-}
-
-button {
-    font-size: 18px;
-    margin: 10px;
-    }
 
 </style>
+
+<svelte:head>
+  <title>Test2 nodeWebFridge</title>
+</svelte:head>
+<table>
+    <tr valign="top">
+        <td class="column side" style="max-width:250px;">
+        <TempTable table_data={table_data} title={title} />
+        <Config
+              label={`click to choose plot items`} 
+              menu={all_plot_keys}
+              bind:choices={plot_keys} 
+              on:close={handleConfigPlotClose}
+              on:open={handleConfigPlotOpen}
+        />
+        <Config
+              label={`choose table items`} 
+              menu={all_table_keys}
+              bind:choices={table_keys} 
+              on:close={handleConfigTableClose}
+              on:open={handleConfigTableOpen}
+        />
+        <Heater />
+        <Timepicker />
+    </td>
+    <td class="column main" style="width:80%">
+        {#if loaded && !update}
+            <Uplot data={plot_data} labels={plot_keys} size={uplot_size} />
+        {:else}
+            <Loader loading={!loaded || update} />
+        {/if}
+    </td>
+    </tr>
+</table>
+

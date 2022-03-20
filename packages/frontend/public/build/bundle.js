@@ -11953,7 +11953,7 @@ var app = (function () {
     const { console: console_1$2 } = globals;
     const file$d = "src/components/uplot_v3.svelte";
 
-    // (239:12) {:else}
+    // (394:12) {:else}
     function create_else_block$2(ctx) {
     	let logicon;
     	let current;
@@ -11985,14 +11985,14 @@ var app = (function () {
     		block,
     		id: create_else_block$2.name,
     		type: "else",
-    		source: "(239:12) {:else}",
+    		source: "(394:12) {:else}",
     		ctx
     	});
 
     	return block;
     }
 
-    // (237:12) {#if logy==3}
+    // (392:12) {#if logy==3}
     function create_if_block$2(ctx) {
     	let linicon;
     	let current;
@@ -12024,7 +12024,7 @@ var app = (function () {
     		block,
     		id: create_if_block$2.name,
     		type: "if",
-    		source: "(237:12) {#if logy==3}",
+    		source: "(392:12) {#if logy==3}",
     		ctx
     	});
 
@@ -12086,17 +12086,17 @@ var app = (function () {
     			div1 = element("div");
     			attr_dev(link, "rel", "stylesheet");
     			attr_dev(link, "href", "https://leeoniya.github.io/uPlot/dist/uPlot.min.css");
-    			add_location(link, file$d, 230, 4, 7099);
+    			add_location(link, file$d, 385, 4, 12678);
     			attr_dev(button0, "class", "svelte-ntrb8o");
-    			add_location(button0, file$d, 232, 8, 7200);
+    			add_location(button0, file$d, 387, 8, 12779);
     			attr_dev(button1, "class", "svelte-ntrb8o");
-    			add_location(button1, file$d, 235, 8, 7289);
+    			add_location(button1, file$d, 390, 8, 12868);
     			attr_dev(button2, "class", "svelte-ntrb8o");
-    			add_location(button2, file$d, 242, 8, 7467);
+    			add_location(button2, file$d, 397, 8, 13046);
     			attr_dev(button3, "class", "svelte-ntrb8o");
-    			add_location(button3, file$d, 245, 8, 7556);
-    			add_location(div0, file$d, 231, 4, 7186);
-    			add_location(div1, file$d, 249, 4, 7659);
+    			add_location(button3, file$d, 400, 8, 13135);
+    			add_location(div0, file$d, 386, 4, 12765);
+    			add_location(div1, file$d, 404, 4, 13238);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -12118,7 +12118,7 @@ var app = (function () {
     			mount_component(svgicon2, button3, null);
     			insert_dev(target, t4, anchor);
     			insert_dev(target, div1, anchor);
-    			/*div1_binding*/ ctx[9](div1);
+    			/*div1_binding*/ ctx[10](div1);
     			current = true;
 
     			if (!mounted) {
@@ -12180,7 +12180,7 @@ var app = (function () {
     			destroy_component(svgicon2);
     			if (detaching) detach_dev(t4);
     			if (detaching) detach_dev(div1);
-    			/*div1_binding*/ ctx[9](null);
+    			/*div1_binding*/ ctx[10](null);
     			mounted = false;
     			run_all(dispose);
     		}
@@ -12203,6 +12203,7 @@ var app = (function () {
     	let { data = data_config } = $$props;
     	let { opts = opts_config } = $$props;
     	let { labels = ['y0', 'y1'] } = $$props;
+    	let { size = { width: 600, height: 400 } } = $$props;
     	let plotDiv;
 
     	// let uPlot;
@@ -12217,6 +12218,7 @@ var app = (function () {
     	let y_range;
 
     	let x_range;
+    	opts = { ...opts, ...size };
 
     	opts.scales.x.auto = () => {
     		return autox;
@@ -12269,6 +12271,8 @@ var app = (function () {
        legendAsTooltipPlugin(),
      ]
     */
+    	opts['plugins'] = [wheelZoomPlugin(0.75)];
+
     	opts.cursor.bind.dblclick = (u, targ, handler) => {
     		return e => {
     			console.log('in dblclick');
@@ -12335,7 +12339,26 @@ var app = (function () {
     	afterUpdate(() => {
     		// console.log('afterUpdate data[0].length', data[0].length)
     		if (mounted) {
-    			if (uplot && autox && autoy) uplot.setData(data); else if (uplot) uplot.setData(data, false);
+    			if (uplot && autox && autoy) {
+    				uplot.setData(data);
+    			} else if (uplot) {
+    				uplot.setData(data, false); // console.log('setData with auto');
+
+    				// console.log('setData with false');
+    				// console.log('uplot', uplot.scales);
+    				let xMin = uplot.scales.x.min;
+
+    				let xMax = uplot.scales.x.max;
+    				let yMin = uplot.scales.y.min;
+    				let yMax = uplot.scales.y.max;
+
+    				// console.log(xMin, xMax, yMin, yMax);
+    				uplot.setScale('x', { min: xMin, max: xMax });
+
+    				uplot.setScale('y', { min: yMin, max: yMax });
+    			}
+
+    			uplot.setSize(size);
     		}
     	});
 
@@ -12392,6 +12415,110 @@ var app = (function () {
     		downloadBlob(blob, filename);
     	}
 
+    	function wheelZoomPlugin(opts) {
+    		let factor = opts.factor || 0.75;
+    		let xMin, xMax, yMin, yMax, xRange, yRange;
+
+    		function clamp(nRange, nMin, nMax, fRange, fMin, fMax) {
+    			if (nRange > fRange) {
+    				nMin = fMin;
+    				nMax = fMax;
+    			} else if (nMin < fMin) {
+    				nMin = fMin;
+    				nMax = fMin + nRange;
+    			} else if (nMax > fMax) {
+    				nMax = fMax;
+    				nMin = fMax - nRange;
+    			}
+
+    			// turn off autoscale when data added
+    			return [nMin, nMax];
+    		}
+
+    		return {
+    			hooks: {
+    				ready: u => {
+    					xMin = u.scales.x.min;
+    					xMax = u.scales.x.max;
+    					yMin = u.scales.y.min;
+    					yMax = u.scales.y.max;
+    					xRange = xMax - xMin;
+    					yRange = yMax - yMin;
+    					let over = u.over;
+    					let rect = over.getBoundingClientRect();
+
+    					// wheel drag pan
+    					over.addEventListener("mousedown", e => {
+    						if (e.button == 1) {
+    							//	plot.style.cursor = "move";
+    							e.preventDefault();
+
+    							let left0 = e.clientX;
+    							let top0 = e.clientY;
+    							let scXMin0 = u.scales.x.min;
+    							let scXMax0 = u.scales.x.max;
+
+    							// Remember y settings... somehow they get reset 
+    							let scYMin0 = u.scales.y.min;
+
+    							let scYMax0 = u.scales.y.max;
+    							let xUnitsPerPx = u.posToVal(1, 'x') - u.posToVal(0, 'x');
+    							let yUnitsPerPx = u.posToVal(1, 'y') - u.posToVal(0, 'y');
+
+    							function onmove(e) {
+    								e.preventDefault();
+    								autox = false;
+    								let left1 = e.clientX;
+    								let top1 = e.clientY;
+    								let dx = xUnitsPerPx * (left1 - left0);
+    								let dy = yUnitsPerPx * (top1 - top0);
+    								u.setScale('x', { min: scXMin0 - dx, max: scXMax0 - dx });
+
+    								// set y scale so that they are not null
+    								u.setScale('y', { min: scYMin0 - dy, max: scYMax0 - dy });
+    							}
+
+    							function onup(e) {
+    								document.removeEventListener("mousemove", onmove);
+    								document.removeEventListener("mouseup", onup);
+    							}
+
+    							document.addEventListener("mousemove", onmove);
+    							document.addEventListener("mouseup", onup);
+    						}
+    					});
+
+    					// wheel scroll zoom
+    					over.addEventListener("wheel", e => {
+    						e.preventDefault();
+    						let { left, top } = u.cursor;
+    						let leftPct = left / rect.width;
+    						let btmPct = 1 - top / rect.height;
+    						let xVal = u.posToVal(left, "x");
+    						let yVal = u.posToVal(top, "y");
+    						let oxRange = u.scales.x.max - u.scales.x.min;
+    						let oyRange = u.scales.y.max - u.scales.y.min;
+    						let nxRange = e.deltaY < 0 ? oxRange * factor : oxRange / factor;
+    						let nxMin = xVal - leftPct * nxRange;
+    						let nxMax = nxMin + nxRange;
+    						[nxMin, nxMax] = clamp(nxRange, nxMin, nxMax, xRange, xMin, xMax);
+    						let nyRange = e.deltaY < 0 ? oyRange * factor : oyRange / factor;
+    						let nyMin = yVal - btmPct * nyRange;
+    						let nyMax = nyMin + nyRange;
+    						[nyMin, nyMax] = clamp(nyRange, nyMin, nyMax, yRange, yMin, yMax);
+    						console.log('wheel', nxMin, nxMax, nyMin, nyMax);
+
+    						u.batch(() => {
+    							u.setScale("x", { min: nxMin, max: nxMax });
+    							u.setScale("y", { min: nyMin, max: nyMax });
+    						});
+    					}); // autox = false;
+    					// autoy = false;
+    				}
+    			}
+    		};
+    	}
+
     	function legendAsTooltipPlugin(
     		{ className, style = {
     			backgroundColor: "rgba(255, 249, 196, 0.92)",
@@ -12446,7 +12573,7 @@ var app = (function () {
     		return { hooks: { init, setCursor: update } };
     	}
 
-    	const writable_props = ['data', 'opts', 'labels'];
+    	const writable_props = ['data', 'opts', 'labels', 'size'];
 
     	Object.keys($$props).forEach(key => {
     		if (!~writable_props.indexOf(key) && key.slice(0, 2) !== '$$' && key !== 'slot') console_1$2.warn(`<Uplot_v3> was created with unknown prop '${key}'`);
@@ -12463,6 +12590,7 @@ var app = (function () {
     		if ('data' in $$props) $$invalidate(7, data = $$props.data);
     		if ('opts' in $$props) $$invalidate(6, opts = $$props.opts);
     		if ('labels' in $$props) $$invalidate(8, labels = $$props.labels);
+    		if ('size' in $$props) $$invalidate(9, size = $$props.size);
     	};
 
     	$$self.$capture_state = () => ({
@@ -12484,6 +12612,7 @@ var app = (function () {
     		data,
     		opts,
     		labels,
+    		size,
     		plotDiv,
     		uplot,
     		html2canvas,
@@ -12501,6 +12630,7 @@ var app = (function () {
     		saveCanvas,
     		saveCanvas2,
     		downloadData,
+    		wheelZoomPlugin,
     		legendAsTooltipPlugin
     	});
 
@@ -12508,6 +12638,7 @@ var app = (function () {
     		if ('data' in $$props) $$invalidate(7, data = $$props.data);
     		if ('opts' in $$props) $$invalidate(6, opts = $$props.opts);
     		if ('labels' in $$props) $$invalidate(8, labels = $$props.labels);
+    		if ('size' in $$props) $$invalidate(9, size = $$props.size);
     		if ('plotDiv' in $$props) $$invalidate(0, plotDiv = $$props.plotDiv);
     		if ('uplot' in $$props) uplot = $$props.uplot;
     		if ('html2canvas' in $$props) html2canvas = $$props.html2canvas;
@@ -12534,6 +12665,7 @@ var app = (function () {
     		opts,
     		data,
     		labels,
+    		size,
     		div1_binding
     	];
     }
@@ -12541,7 +12673,7 @@ var app = (function () {
     class Uplot_v3 extends SvelteComponentDev {
     	constructor(options) {
     		super(options);
-    		init(this, options, instance$e, create_fragment$e, safe_not_equal, { data: 7, opts: 6, labels: 8 });
+    		init(this, options, instance$e, create_fragment$e, safe_not_equal, { data: 7, opts: 6, labels: 8, size: 9 });
 
     		dispatch_dev("SvelteRegisterComponent", {
     			component: this,
@@ -12572,6 +12704,14 @@ var app = (function () {
     	}
 
     	set labels(value) {
+    		throw new Error("<Uplot_v3>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	get size() {
+    		throw new Error("<Uplot_v3>: Props cannot be read directly from the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
+    	}
+
+    	set size(value) {
     		throw new Error("<Uplot_v3>: Props cannot be set directly on the component instance unless compiling with 'accessors: true' or '<svelte:options accessors/>'");
     	}
     }
@@ -13477,7 +13617,7 @@ var app = (function () {
     const { Object: Object_1$1, console: console_1$3 } = globals;
     const file$h = "src/routes/Test2.svelte";
 
-    // (27:8) {:else}
+    // (210:8) {:else}
     function create_else_block$3(ctx) {
     	let loader;
     	let current;
@@ -13520,14 +13660,14 @@ var app = (function () {
     		block,
     		id: create_else_block$3.name,
     		type: "else",
-    		source: "(27:8) {:else}",
+    		source: "(210:8) {:else}",
     		ctx
     	});
 
     	return block;
     }
 
-    // (25:8) {#if loaded && !update}
+    // (208:8) {#if loaded && !update}
     function create_if_block$4(ctx) {
     	let uplot;
     	let current;
@@ -13535,7 +13675,8 @@ var app = (function () {
     	uplot = new Uplot_v3({
     			props: {
     				data: /*plot_data*/ ctx[1],
-    				labels: /*plot_keys*/ ctx[4]
+    				labels: /*plot_keys*/ ctx[4],
+    				size: /*uplot_size*/ ctx[9]
     			},
     			$$inline: true
     		});
@@ -13552,6 +13693,7 @@ var app = (function () {
     			const uplot_changes = {};
     			if (dirty & /*plot_data*/ 2) uplot_changes.data = /*plot_data*/ ctx[1];
     			if (dirty & /*plot_keys*/ 16) uplot_changes.labels = /*plot_keys*/ ctx[4];
+    			if (dirty & /*uplot_size*/ 512) uplot_changes.size = /*uplot_size*/ ctx[9];
     			uplot.$set(uplot_changes);
     		},
     		i: function intro(local) {
@@ -13572,7 +13714,7 @@ var app = (function () {
     		block,
     		id: create_if_block$4.name,
     		type: "if",
-    		source: "(25:8) {#if loaded && !update}",
+    		source: "(208:8) {#if loaded && !update}",
     		ctx
     	});
 
@@ -13581,8 +13723,9 @@ var app = (function () {
 
     function create_fragment$i(ctx) {
     	let t0;
-    	let div2;
-    	let div0;
+    	let table;
+    	let tr;
+    	let td0;
     	let temptable;
     	let t1;
     	let config0;
@@ -13595,7 +13738,7 @@ var app = (function () {
     	let t4;
     	let timepicker;
     	let t5;
-    	let div1;
+    	let td1;
     	let current_block_type_index;
     	let if_block;
     	let current;
@@ -13609,7 +13752,7 @@ var app = (function () {
     		});
 
     	function config0_choices_binding(value) {
-    		/*config0_choices_binding*/ ctx[14](value);
+    		/*config0_choices_binding*/ ctx[15](value);
     	}
 
     	let config0_props = {
@@ -13623,11 +13766,11 @@ var app = (function () {
 
     	config0 = new MyCollapse({ props: config0_props, $$inline: true });
     	binding_callbacks.push(() => bind(config0, 'choices', config0_choices_binding));
-    	config0.$on("close", /*handleConfigPlotClose*/ ctx[10]);
-    	config0.$on("open", /*handleConfigPlotOpen*/ ctx[9]);
+    	config0.$on("close", /*handleConfigPlotClose*/ ctx[11]);
+    	config0.$on("open", /*handleConfigPlotOpen*/ ctx[10]);
 
     	function config1_choices_binding(value) {
-    		/*config1_choices_binding*/ ctx[15](value);
+    		/*config1_choices_binding*/ ctx[16](value);
     	}
 
     	let config1_props = {
@@ -13641,7 +13784,7 @@ var app = (function () {
 
     	config1 = new MyCollapse({ props: config1_props, $$inline: true });
     	binding_callbacks.push(() => bind(config1, 'choices', config1_choices_binding));
-    	config1.$on("close", /*handleConfigTableClose*/ ctx[11]);
+    	config1.$on("close", /*handleConfigTableClose*/ ctx[12]);
     	config1.$on("open", handleConfigTableOpen);
     	heater = new Checkbox_list_component({ $$inline: true });
     	timepicker = new Timepicker({ $$inline: true });
@@ -13659,8 +13802,9 @@ var app = (function () {
     	const block = {
     		c: function create() {
     			t0 = space();
-    			div2 = element("div");
-    			div0 = element("div");
+    			table = element("table");
+    			tr = element("tr");
+    			td0 = element("td");
     			create_component(temptable.$$.fragment);
     			t1 = space();
     			create_component(config0.$$.fragment);
@@ -13671,35 +13815,39 @@ var app = (function () {
     			t4 = space();
     			create_component(timepicker.$$.fragment);
     			t5 = space();
-    			div1 = element("div");
+    			td1 = element("td");
     			if_block.c();
     			document.title = "Test2 nodeWebFridge";
-    			attr_dev(div0, "class", "column side svelte-b7zrpx");
-    			add_location(div0, file$h, 4, 4, 88);
-    			attr_dev(div1, "class", "column main svelte-b7zrpx");
-    			add_location(div1, file$h, 23, 4, 719);
-    			attr_dev(div2, "class", "row svelte-b7zrpx");
-    			add_location(div2, file$h, 3, 0, 66);
+    			attr_dev(td0, "class", "column side");
+    			set_style(td0, "max-width", "250px");
+    			add_location(td0, file$h, 187, 8, 6839);
+    			attr_dev(td1, "class", "column main");
+    			set_style(td1, "width", "80%");
+    			add_location(td1, file$h, 206, 4, 7493);
+    			attr_dev(tr, "valign", "top");
+    			add_location(tr, file$h, 186, 4, 6813);
+    			add_location(table, file$h, 185, 0, 6801);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
     		},
     		m: function mount(target, anchor) {
     			insert_dev(target, t0, anchor);
-    			insert_dev(target, div2, anchor);
-    			append_dev(div2, div0);
-    			mount_component(temptable, div0, null);
-    			append_dev(div0, t1);
-    			mount_component(config0, div0, null);
-    			append_dev(div0, t2);
-    			mount_component(config1, div0, null);
-    			append_dev(div0, t3);
-    			mount_component(heater, div0, null);
-    			append_dev(div0, t4);
-    			mount_component(timepicker, div0, null);
-    			append_dev(div2, t5);
-    			append_dev(div2, div1);
-    			if_blocks[current_block_type_index].m(div1, null);
+    			insert_dev(target, table, anchor);
+    			append_dev(table, tr);
+    			append_dev(tr, td0);
+    			mount_component(temptable, td0, null);
+    			append_dev(td0, t1);
+    			mount_component(config0, td0, null);
+    			append_dev(td0, t2);
+    			mount_component(config1, td0, null);
+    			append_dev(td0, t3);
+    			mount_component(heater, td0, null);
+    			append_dev(td0, t4);
+    			mount_component(timepicker, td0, null);
+    			append_dev(tr, t5);
+    			append_dev(tr, td1);
+    			if_blocks[current_block_type_index].m(td1, null);
     			current = true;
     		},
     		p: function update(ctx, [dirty]) {
@@ -13750,7 +13898,7 @@ var app = (function () {
     				}
 
     				transition_in(if_block, 1);
-    				if_block.m(div1, null);
+    				if_block.m(td1, null);
     			}
     		},
     		i: function intro(local) {
@@ -13774,7 +13922,7 @@ var app = (function () {
     		},
     		d: function destroy(detaching) {
     			if (detaching) detach_dev(t0);
-    			if (detaching) detach_dev(div2);
+    			if (detaching) detach_dev(table);
     			destroy_component(temptable);
     			destroy_component(config0);
     			destroy_component(config1);
@@ -13799,10 +13947,18 @@ var app = (function () {
     	console.log('handleConfigTableOpen', e);
     }
 
+    function getSize() {
+    	return {
+    		width: window.innerWidth - 300, // left column
+    		height: window.innerHeight - 100, // top row of icons
+    		
+    	};
+    }
+
     function instance$i($$self, $$props, $$invalidate) {
     	let $redisSub;
     	validate_store(redisSub, 'redisSub');
-    	component_subscribe($$self, redisSub, $$value => $$invalidate(13, $redisSub = $$value));
+    	component_subscribe($$self, redisSub, $$value => $$invalidate(14, $redisSub = $$value));
     	let { $$slots: slots = {}, $$scope } = $$props;
     	validate_slots('Test2', slots, []);
     	console.log(table_data_default);
@@ -13818,6 +13974,7 @@ var app = (function () {
     	let all_plot_keys;
     	let all_table_keys;
     	let hostname = 'localhost';
+    	let uplot_size = { width: 600, height: 400 };
 
     	function handleConfigPlotOpen(e) {
     		console.log('handleConfigPlotOpen', e);
@@ -13863,7 +14020,7 @@ var app = (function () {
     		// Fetch all the sensor data from the server
     		console.log('fetchRedis');
 
-    		$$invalidate(12, all_plot_data = null);
+    		$$invalidate(13, all_plot_data = null);
 
     		for (let key of all_plot_keys) {
     			console.log('process redis data', key);
@@ -13884,7 +14041,7 @@ var app = (function () {
     				// console.log('merge into plot_data');
     				all_plot_data.push(readings);
     			} else {
-    				$$invalidate(12, all_plot_data = [times, readings]);
+    				$$invalidate(13, all_plot_data = [times, readings]);
     			} // console.log('create plot_data');
     			// console.log('times', times, readings);
     		}
@@ -13893,7 +14050,29 @@ var app = (function () {
     		$$invalidate(2, loaded = true);
     	}
 
+    	// window resize debouncer from:
+    	// https://svelte.dev/repl/33d2066858a44c6e800f2377105d8c38?version=3.46.4
+    	const debounce = (func, delay) => {
+    		let timer;
+
+    		return function () {
+    			const context = this;
+    			const args = arguments;
+    			clearTimeout(timer);
+    			timer = setTimeout(() => func.apply(context, args), delay);
+    		};
+    	};
+
+    	const setWindowWidth = () => {
+    		let windowWidth = `${window.innerWidth}px`;
+    		$$invalidate(9, uplot_size = getSize());
+    		console.log(windowWidth, getSize());
+    	};
+
+    	const debouncedSetWindowWidth = debounce(setWindowWidth, 300);
+
     	onMount(async () => {
+    		$$invalidate(9, uplot_size = getSize());
     		hostname = new URL(window.location.href).hostname;
     		console.log('hostname', hostname);
     		$$invalidate(5, all_plot_keys = await getRedis('plot_keys'));
@@ -13910,7 +14089,12 @@ var app = (function () {
     		// console.log('got p_k', p_k);
     		await fetchRedis();
 
+    		window.addEventListener('resize', debouncedSetWindowWidth);
     		console.log('Finished onMounted');
+
+    		return () => {
+    			window.removeEventListener('resize', debouncedSetWindowWidth);
+    		};
     	});
 
     	const writable_props = [];
@@ -13952,6 +14136,7 @@ var app = (function () {
     		all_plot_keys,
     		all_table_keys,
     		hostname,
+    		uplot_size,
     		handleConfigPlotOpen,
     		handleConfigPlotClose,
     		handleConfigTableOpen,
@@ -13959,12 +14144,16 @@ var app = (function () {
     		getRedis,
     		build_plot_data,
     		fetchRedis,
+    		getSize,
+    		debounce,
+    		setWindowWidth,
+    		debouncedSetWindowWidth,
     		$redisSub
     	});
 
     	$$self.$inject_state = $$props => {
     		if ('table_data' in $$props) $$invalidate(0, table_data = $$props.table_data);
-    		if ('all_plot_data' in $$props) $$invalidate(12, all_plot_data = $$props.all_plot_data);
+    		if ('all_plot_data' in $$props) $$invalidate(13, all_plot_data = $$props.all_plot_data);
     		if ('plot_data' in $$props) $$invalidate(1, plot_data = $$props.plot_data);
     		if ('loaded' in $$props) $$invalidate(2, loaded = $$props.loaded);
     		if ('update' in $$props) $$invalidate(3, update = $$props.update);
@@ -13974,6 +14163,7 @@ var app = (function () {
     		if ('all_plot_keys' in $$props) $$invalidate(5, all_plot_keys = $$props.all_plot_keys);
     		if ('all_table_keys' in $$props) $$invalidate(8, all_table_keys = $$props.all_table_keys);
     		if ('hostname' in $$props) hostname = $$props.hostname;
+    		if ('uplot_size' in $$props) $$invalidate(9, uplot_size = $$props.uplot_size);
     	};
 
     	if ($$props && "$$inject" in $$props) {
@@ -13985,7 +14175,7 @@ var app = (function () {
     			 console.log('plot_keys', plot_keys);
     		}
 
-    		if ($$self.$$.dirty & /*$redisSub, table_data, loaded, all_plot_data, all_plot_keys, plot_data*/ 12327) {
+    		if ($$self.$$.dirty & /*$redisSub, table_data, loaded, all_plot_data, all_plot_keys, plot_data*/ 24615) {
     			 {
     				let msg = $redisSub.message;
     				let ready_to_update = false;
@@ -14014,8 +14204,8 @@ var app = (function () {
 
     					// Update plot
     					if (loaded) {
-    						console.log('got time:', msg.time);
-    						all_plot_data[0].push(msg.time / 1000); // push time into plot_data, convet to seconds
+    						// console.log('got time:', msg.time);
+    						all_plot_data[0].push(msg.time / 1000); // push time into plot_data, convert to seconds
 
     						all_plot_keys.forEach((key, idx) => {
     							// push sensor readings
@@ -14023,7 +14213,7 @@ var app = (function () {
     						});
 
     						build_plot_data();
-    						((((($$invalidate(1, plot_data), $$invalidate(13, $redisSub)), $$invalidate(0, table_data)), $$invalidate(2, loaded)), $$invalidate(12, all_plot_data)), $$invalidate(5, all_plot_keys)); // this causes the plot to be updated
+    						((((($$invalidate(1, plot_data), $$invalidate(14, $redisSub)), $$invalidate(0, table_data)), $$invalidate(2, loaded)), $$invalidate(13, all_plot_data)), $$invalidate(5, all_plot_keys)); // this causes the plot to be updated
     					} // plot_keys = plot_keys;
     				}
     			}
@@ -14050,6 +14240,7 @@ var app = (function () {
     		title,
     		table_keys,
     		all_table_keys,
+    		uplot_size,
     		handleConfigPlotOpen,
     		handleConfigPlotClose,
     		handleConfigTableClose,
