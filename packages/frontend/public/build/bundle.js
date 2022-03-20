@@ -11953,7 +11953,7 @@ var app = (function () {
     const { console: console_1$2 } = globals;
     const file$d = "src/components/uplot_v3.svelte";
 
-    // (394:12) {:else}
+    // (397:12) {:else}
     function create_else_block$2(ctx) {
     	let logicon;
     	let current;
@@ -11985,14 +11985,14 @@ var app = (function () {
     		block,
     		id: create_else_block$2.name,
     		type: "else",
-    		source: "(394:12) {:else}",
+    		source: "(397:12) {:else}",
     		ctx
     	});
 
     	return block;
     }
 
-    // (392:12) {#if logy==3}
+    // (395:12) {#if logy==3}
     function create_if_block$2(ctx) {
     	let linicon;
     	let current;
@@ -12024,7 +12024,7 @@ var app = (function () {
     		block,
     		id: create_if_block$2.name,
     		type: "if",
-    		source: "(392:12) {#if logy==3}",
+    		source: "(395:12) {#if logy==3}",
     		ctx
     	});
 
@@ -12086,17 +12086,17 @@ var app = (function () {
     			div1 = element("div");
     			attr_dev(link, "rel", "stylesheet");
     			attr_dev(link, "href", "https://leeoniya.github.io/uPlot/dist/uPlot.min.css");
-    			add_location(link, file$d, 385, 4, 12678);
+    			add_location(link, file$d, 388, 4, 12849);
     			attr_dev(button0, "class", "svelte-ntrb8o");
-    			add_location(button0, file$d, 387, 8, 12779);
+    			add_location(button0, file$d, 390, 8, 12950);
     			attr_dev(button1, "class", "svelte-ntrb8o");
-    			add_location(button1, file$d, 390, 8, 12868);
+    			add_location(button1, file$d, 393, 8, 13039);
     			attr_dev(button2, "class", "svelte-ntrb8o");
-    			add_location(button2, file$d, 397, 8, 13046);
+    			add_location(button2, file$d, 400, 8, 13217);
     			attr_dev(button3, "class", "svelte-ntrb8o");
-    			add_location(button3, file$d, 400, 8, 13135);
-    			add_location(div0, file$d, 386, 4, 12765);
-    			add_location(div1, file$d, 404, 4, 13238);
+    			add_location(button3, file$d, 403, 8, 13306);
+    			add_location(div0, file$d, 389, 4, 12936);
+    			add_location(div1, file$d, 407, 4, 13409);
     		},
     		l: function claim(nodes) {
     			throw new Error("options.hydrate only works if the component was compiled with the `hydratable: true` option");
@@ -12342,6 +12342,8 @@ var app = (function () {
     			if (uplot && autox && autoy) {
     				uplot.setData(data);
     			} else if (uplot) {
+    				// Not sure when to do the setData... before or after
+    				//   setScale
     				uplot.setData(data, false); // console.log('setData with auto');
 
     				// console.log('setData with false');
@@ -12356,7 +12358,7 @@ var app = (function () {
     				uplot.setScale('x', { min: xMin, max: xMax });
 
     				uplot.setScale('y', { min: yMin, max: yMax });
-    			}
+    			} // uplot.setData(data, false);
 
     			uplot.setSize(size);
     		}

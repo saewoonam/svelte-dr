@@ -131,6 +131,8 @@
                         uplot.setData(data);
                         // console.log('setData with auto');
                 } else if (uplot) {
+                        // Not sure when to do the setData... before or after
+                        //   setScale
                         uplot.setData(data, false);
                         // console.log('setData with false');
                         // console.log('uplot', uplot.scales);
@@ -142,6 +144,7 @@
                         // console.log(xMin, xMax, yMin, yMax);
                         uplot.setScale('x', {min:xMin, max:xMax});
                         uplot.setScale('y', {min:yMin, max:yMax});
+                        // uplot.setData(data, false);
                 }
                 uplot.setSize(size);
         }
